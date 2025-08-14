@@ -1,0 +1,1230 @@
+import sqlite3
+import json
+import os
+import uuid
+import qrcode
+import io
+import base64
+import re
+from datetime import datetime
+from contextlib import contextmanager
+
+
+class Database:
+    def __init__(self, db_path="db/bot_database.db"):
+        self.db_path = db_path
+        self.init_database()
+        self.migrate_database()
+
+    @contextmanager
+    def get_connection(self):
+        """Context manager bilan database connection"""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+    def init_database(self):
+        """Database va jadvallarni yaratish"""
+        os.makedirs('db', exist_ok=True)
+
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                # Users jadvali
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS users (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        telegram_id INTEGER UNIQUE NOT NULL,
+                        full_name TEXT DEFAULT '',
+                        phone_number TEXT DEFAULT '',
+                        event_id INTEGER,
+                        payment_status TEXT DEFAULT 'pending',
+                        qr_code TEXT,
+                        qr_id TEXT UNIQUE,
+                        approved INTEGER DEFAULT 0,
+                        registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        attended INTEGER DEFAULT 0,
+                        attended_at TIMESTAMP,
+                        attended_by TEXT,
+                        language TEXT DEFAULT 'uz',
+                        FOREIGN KEY (event_id) REFERENCES events (id)
+                    )
+                ''')
+
+                # Events jadvali
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS events (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name_uz TEXT NOT NULL,
+                        name_ru TEXT NOT NULL,
+                        name_en TEXT NOT NULL,
+                        date TEXT NOT NULL,
+                        time TEXT NOT NULL,
+                        address_uz TEXT NOT NULL,
+                        address_ru TEXT NOT NULL,
+                        address_en TEXT NOT NULL,
+                        payment_amount REAL NOT NULL,
+                        is_active INTEGER DEFAULT 1,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                ''')
+
+                # Channels jadvali - yangilangan
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS channels (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        channel_id TEXT NOT NULL,
+                        channel_name TEXT NOT NULL,
+                        channel_username TEXT,
+                        channel_type TEXT DEFAULT 'public',
+                        is_active INTEGER DEFAULT 1,
+                        added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(channel_id)
+                    )
+                ''')
+
+                conn.commit()
+                print("✅ Database jadvallari yaratildi!")
+
+                # Default admin qo'shish
+                try:
+                    from data import config
+                    if hasattr(config, 'ADMINS') and config.ADMINS:
+                        for admin_id in config.ADMINS:
+                            print(f"✅ Default admin: {admin_id}")
+                except Exception as e:
+                    print(f"⚠️ Default admin tekshirishda xatolik: {e}")
+
+            except Exception as e:
+                print(f"❌ Database yaratishda xatolik: {e}")
+
+    def migrate_database(self):
+        """Database strukturasini yangilash"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                print("🔧 Database strukturasini tekshiryapmiz...")
+
+                # Channels jadval strukturasini yangilash
+                cursor.execute("PRAGMA table_info(channels)")
+                channel_columns = [column[1] for column in cursor.fetchall()]
+
+                missing_columns = []
+                if 'channel_username' not in channel_columns:
+                    missing_columns.append('channel_username TEXT')
+                if 'channel_type' not in channel_columns:
+                    missing_columns.append('channel_type TEXT DEFAULT "public"')
+                if 'is_active' not in channel_columns:
+                    missing_columns.append('is_active INTEGER DEFAULT 1')
+
+                for column in missing_columns:
+                    cursor.execute(f"ALTER TABLE channels ADD COLUMN {column}")
+                    print(f"✅ Qo'shildi: {column}")
+
+                # Events jadval uchun ko'p til ustunlari
+                cursor.execute("PRAGMA table_info(events)")
+                event_columns = [column[1] for column in cursor.fetchall()]
+
+                if 'name_ru' not in event_columns:
+                    cursor.execute("ALTER TABLE events ADD COLUMN name_ru TEXT DEFAULT ''")
+                    cursor.execute("ALTER TABLE events ADD COLUMN name_en TEXT DEFAULT ''")
+                    cursor.execute("ALTER TABLE events ADD COLUMN address_ru TEXT DEFAULT ''")
+                    cursor.execute("ALTER TABLE events ADD COLUMN address_en TEXT DEFAULT ''")
+
+                    # Mavjud ma'lumotlarni yangilash
+                    cursor.execute(
+                        "UPDATE events SET name_ru = name_uz, name_en = name_uz WHERE name_ru IS NULL OR name_ru = ''")
+                    cursor.execute(
+                        "UPDATE events SET address_ru = address_uz, address_en = address_uz WHERE address_ru IS NULL OR address_ru = ''")
+                    print("✅ Ko'p til ustunlari qo'shildi")
+
+                # Users jadval uchun language ustuni
+                cursor.execute("PRAGMA table_info(users)")
+                user_columns = [column[1] for column in cursor.fetchall()]
+
+                if 'language' not in user_columns:
+                    cursor.execute("ALTER TABLE users ADD COLUMN language TEXT DEFAULT 'uz'")
+                    print("✅ language ustuni qo'shildi")
+
+                conn.commit()
+                print("✅ Database strukturasi yangilandi!")
+
+            except Exception as e:
+                print(f"❌ Database migratsiyasida xatolik: {e}")
+
+    def parse_channel_link(self, link):
+        """Improved channel link parsing with better validation"""
+        try:
+            link = link.strip()
+
+            # Forbidden usernames - expand this list
+            forbidden_usernames = {
+                'public', 'private', 'joinchat', 'addstickers', 'proxy', 'socks',
+                'bot', 'channel', 'group', 'supergroup', 'admin', 'support',
+                'settings', 'help', 'faq', 'info', 'news', 'updates'
+            }
+
+            result = {
+                'channel_id': None,
+                'username': None,
+                'type': 'unknown',
+                'original_link': link
+            }
+
+            # Pattern matching with improved validation
+            # 1. Check for public username patterns first
+            username_pattern = r'(?:https?://)?t\.me/([A-Za-z_][A-Za-z0-9_]{4,31})(?:\?[^/]*)?$'
+            direct_username_pattern = r'^@?([A-Za-z_][A-Za-z0-9_]{4,31})$'
+
+            username = None
+
+            # Try to extract username from various formats
+            if match := re.search(username_pattern, link):
+                username = match.group(1)
+            elif match := re.search(direct_username_pattern, link):
+                username = match.group(1)
+
+            # Validate username if found
+            if username:
+                if username.lower() in forbidden_usernames:
+                    result.update({
+                        'channel_id': f"@{username}",
+                        'username': username,
+                        'type': 'invalid',
+                        'error': f'Username "{username}" is not allowed'
+                    })
+                    return result
+
+                # Valid username
+                result.update({
+                    'channel_id': f"@{username}",
+                    'username': username,
+                    'type': 'public'
+                })
+                return result
+
+            # Check for joinchat links
+            if 'joinchat' in link:
+                result.update({
+                    'channel_id': 'invite_link',
+                    'username': None,
+                    'type': 'public_invite',
+                    'error': 'Invite links not supported. Use channel username or ID.'
+                })
+                return result
+
+            # Check for private invite links
+            if '+' in link and 't.me' in link:
+                result.update({
+                    'channel_id': 'private_invite',
+                    'username': None,
+                    'type': 'private_invite',
+                    'error': 'Private invite links not supported. Use channel username or ID.'
+                })
+                return result
+
+            # Check for channel ID (numeric)
+            if re.match(r'^-?\d{8,}$', link):
+                result.update({
+                    'channel_id': link,
+                    'username': None,
+                    'type': 'private' if link.startswith('-100') else 'group'
+                })
+                return result
+
+            # If nothing matched, it's invalid
+            result.update({
+                'channel_id': link,
+                'username': None,
+                'type': 'invalid',
+                'error': f'Invalid format: {link}'
+            })
+            return result
+
+        except Exception as e:
+            print(f"❌ Parse error: {e}")
+            return {
+                'channel_id': link,
+                'username': None,
+                'type': 'error',
+                'original_link': link,
+                'error': str(e)
+            }
+    # Fixed methods for database.py
+
+    async def get_channel_info_from_bot(self, bot, channel_data):
+        """TUZATILGAN bot API channel info retrieval"""
+        try:
+            channel_id = channel_data['channel_id']
+            channel_type = channel_data.get('type', 'unknown')
+            original_username = channel_data.get('username')
+
+            # Invalid kanallar uchun username ni saqlash
+            if channel_type in ['invalid', 'unknown', 'error', 'public_invite', 'private_invite']:
+                # Original username mavjud bo'lsa uni ishlatish
+                if original_username:
+                    fallback_name = f"@{original_username}"
+                else:
+                    fallback_name = self._generate_fallback_name(channel_data)
+
+                return {
+                    'success': False,
+                    'name': fallback_name,
+                    'username': original_username,  # Original username ni saqlash
+                    'type': channel_type,
+                    'error': f"Cannot retrieve info for {channel_type} channels"
+                }
+
+            try:
+                # Bot API orqali ma'lumot olish
+                chat = await bot.get_chat(channel_id)
+
+                # Chat turini tekshirish
+                if chat.type not in ['channel', 'supergroup']:
+                    return {
+                        'success': False,
+                        'name': original_username or f"Invalid_Type_{chat.type}",
+                        'username': original_username or chat.username,
+                        'type': 'invalid',
+                        'error': f"Expected channel/supergroup, got {chat.type}"
+                    }
+
+                return {
+                    'success': True,
+                    'name': chat.title or f"Channel_{channel_id}",
+                    'username': chat.username or original_username,  # Bot API dan yoki original dan
+                    'type': 'channel' if chat.type == 'channel' else 'supergroup',
+                    'member_count': getattr(chat, 'members_count', 0),
+                    'description': getattr(chat, 'description', ''),
+                    'id': chat.id
+                }
+
+            except Exception as bot_error:
+                print(f"⚠️ Bot API error for {channel_id}: {bot_error}")
+
+                # Bot API xatolik berganida original ma'lumotlarni saqlash
+                error_msg = str(bot_error).lower()
+
+                if 'chat not found' in error_msg:
+                    error_type = "Channel not found or bot has no access"
+                elif 'forbidden' in error_msg:
+                    error_type = "Bot lacks permission to access channel"
+                else:
+                    error_type = f"API error: {bot_error}"
+
+                # MUHIM: Original username ni saqlash
+                fallback_name = f"@{original_username}" if original_username else self._generate_fallback_name(
+                    channel_data)
+
+                return {
+                    'success': False,
+                    'name': fallback_name,
+                    'username': original_username,  # Original username saqlanadi
+                    'type': channel_data.get('type', 'unknown'),
+                    'error': error_type
+                }
+
+        except Exception as e:
+            print(f"❌ Critical error in get_channel_info_from_bot: {e}")
+            original_username = channel_data.get('username')
+
+            return {
+                'success': False,
+                'name': f"@{original_username}" if original_username else f"Error_{channel_data.get('channel_id', 'unknown')}",
+                'username': original_username,
+                'type': 'error',
+                'error': str(e)
+            }
+
+    async def add_channel_smart(self, bot, channel_link):
+        """Fixed async channel addition"""
+        try:
+            # Parse the link
+            channel_data = self.parse_channel_link(channel_link)
+
+            # Early validation
+            if channel_data['type'] in ['invalid', 'error']:
+                return {
+                    'success': False,
+                    'message': f"❌ Invalid channel format: {channel_link}\n\nSupported formats:\n• @channel_name\n• t.me/channel_name\n• -100123456789",
+                    'channel_data': channel_data
+                }
+
+            if channel_data['type'] in ['public_invite', 'private_invite']:
+                return {
+                    'success': False,
+                    'message': f"❌ Invite links not supported!\n\nUse channel username or ID instead.",
+                    'channel_data': channel_data
+                }
+
+            # Get channel info via bot API (THIS MUST BE AWAITED!)
+            channel_info = await self.get_channel_info_from_bot(bot, channel_data)
+
+            # Check if channel already exists
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT id, channel_name FROM channels WHERE channel_id = ?',
+                               (channel_data['channel_id'],))
+                existing = cursor.fetchone()
+
+                if existing:
+                    return {
+                        'success': False,
+                        'message': f"ℹ️ Channel already exists!\n\nName: {existing[1]}\nID: {channel_data['channel_id']}",
+                        'channel_data': channel_data
+                    }
+
+                # Add new channel
+                cursor.execute('''
+                    INSERT INTO channels (channel_id, channel_name, channel_username, channel_type, is_active) 
+                    VALUES (?, ?, ?, ?, 1)
+                ''', (
+                    channel_data['channel_id'],
+                    channel_info['name'],
+                    channel_info.get('username'),
+                    channel_data['type']
+                ))
+                conn.commit()
+
+                success_msg = f"✅ Channel added successfully!\n\n"
+                success_msg += f"📝 Name: {channel_info['name']}\n"
+                success_msg += f"🆔 ID: {channel_data['channel_id']}\n"
+                success_msg += f"🔗 Username: @{channel_info.get('username', 'none')}\n"
+                success_msg += f"📊 Type: {channel_data['type']}"
+
+                if not channel_info['success']:
+                    success_msg += f"\n⚠️ Warning: {channel_info.get('error', 'Unknown issue')}"
+
+                return {
+                    'success': True,
+                    'message': success_msg,
+                    'channel_data': channel_data,
+                    'channel_info': channel_info
+                }
+
+        except Exception as e:
+            return {
+                'success': False,
+                'message': f"❌ System error adding channel!\n\nLink: {channel_link}\nError: {str(e)}",
+                'error': str(e)
+            }
+
+    def _generate_fallback_name(self, channel_data):
+        """TUZATILGAN fallback kanal nomi yaratish"""
+        channel_id = channel_data.get('channel_id', '')
+        username = channel_data.get('username')
+        channel_type = channel_data.get('type', 'unknown')
+        original_link = channel_data.get('original_link', '')
+
+        # Username mavjud bo'lsa, har doim @ bilan qaytarish
+        if username:
+            return f"@{username}"
+        elif channel_type == 'private':
+            return f"Private Channel ({channel_id[:10]}...)"
+        elif channel_type == 'public_invite':
+            return f"Public Invite Link"
+        elif channel_type == 'private_invite':
+            return f"Private Invite Link"
+        elif channel_type == 'invalid':
+            return f"Invalid Link ({original_link[:20]}...)"
+        elif channel_type == 'supergroup':
+            return f"Supergroup ({channel_id})"
+        elif channel_type == 'group':
+            return f"Group ({channel_id})"
+        else:
+            return f"Unknown Channel ({channel_id[:15]}...)"
+
+    def update_user_event(self, telegram_id, event_id):
+        """User ning event_id sini yangilash"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    'UPDATE users SET event_id = ? WHERE telegram_id = ?',
+                    (event_id, int(telegram_id))
+                )
+                if cursor.rowcount > 0:
+                    conn.commit()
+                    print(f"✅ User {telegram_id} event_id yangilandi: {event_id}")
+                    return True
+                else:
+                    print(f"❌ User topilmadi: {telegram_id}")
+                    return False
+            except Exception as e:
+                print(f"❌ Event ID yangilashda xatolik: {e}")
+                return False
+
+    def debug_channel_parsing(self):
+        """Debug: Kanal parsing testi"""
+        test_links = [
+            "https://t.me/Yosh_Dasturcii",
+            "t.me/Yosh_Dasturcii",
+            "@Yosh_Dasturcii",
+            "Yosh_Dasturcii",
+            "https://t.me/public",  # Bu noto'g'ri
+            "https://t.me/joinchat/ABC123",
+            "https://t.me/+ABC123",
+            "-1001234567890"
+        ]
+
+        print("\n🧪 KANAL PARSING DEBUG TEST")
+        print("=" * 60)
+
+        for i, link in enumerate(test_links, 1):
+            print(f"\n{i}. 🔗 Input: {link}")
+            result = self.parse_channel_link(link)
+            print(f"   📋 Natija:")
+            print(f"      channel_id: {result.get('channel_id')}")
+            print(f"      username: {result.get('username')}")
+            print(f"      type: {result.get('type')}")
+            if 'error' in result:
+                print(f"      error: {result.get('error')}")
+            print(
+                f"   {'✅ TOGRI' if result.get('type') == 'public' and result.get('username') else '❌ NOTOGRI'}")
+
+        print("\n" + "=" * 60)
+    def remove_channel(self, channel_id):
+        """Kanalni o'chirish"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute('DELETE FROM channels WHERE channel_id = ?', (channel_id,))
+                if cursor.rowcount > 0:
+                    conn.commit()
+                    print(f"✅ Kanal o'chirildi: {channel_id}")
+                    return True
+                else:
+                    print(f"❌ Kanal topilmadi: {channel_id}")
+                    return False
+            except Exception as e:
+                print(f"❌ Kanal o'chirishda xatolik: {e}")
+                return False
+
+    def get_all_channels(self):
+        """Barcha faol kanallarni olish"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute('''
+                    SELECT channel_id, channel_name, channel_username, channel_type 
+                    FROM channels 
+                    WHERE is_active = 1
+                    ORDER BY added_at DESC
+                ''')
+                return cursor.fetchall()
+            except Exception as e:
+                print(f"❌ Kanallarni olishda xatolik: {e}")
+                return []
+
+    def check_user_subscription(self, bot, user_id, channel_id):
+        """Bitta kanal uchun obuna tekshirish"""
+        try:
+            member = bot.get_chat_member(channel_id, user_id)
+            return member.status in ['member', 'administrator', 'creator']
+        except Exception as e:
+            print(f"❌ Obuna tekshirishda xatolik: {channel_id}, xatolik: {e}")
+            return False
+
+    def check_all_subscriptions(self, bot, user_id):
+        """Barcha kanallar uchun obuna tekshirish"""
+        channels = self.get_all_channels()
+        unsubscribed_channels = []
+
+        for channel in channels:
+            channel_id, channel_name, channel_username, channel_type = channel
+
+            if not self.check_user_subscription(bot, user_id, channel_id):
+                unsubscribed_channels.append({
+                    'id': channel_id,
+                    'name': channel_name,
+                    'username': channel_username,
+                    'type': channel_type
+                })
+
+        return {
+            'all_subscribed': len(unsubscribed_channels) == 0,
+            'unsubscribed': unsubscribed_channels,
+            'total_channels': len(channels)
+        }
+
+    # EVENT BOSHQARUVI
+    def add_event(self, name, date, time, address, payment_amount, language='uz'):
+        """Yangi tadbir qo'shish"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                # Barcha tadbirlarni nofaol qilish
+                cursor.execute('UPDATE events SET is_active = 0')
+
+                # Yangi tadbir qo'shish
+                name_uz = name_ru = name_en = name
+                address_uz = address_ru = address_en = address
+
+                cursor.execute('''
+                    INSERT INTO events (name_uz, name_ru, name_en, date, time, 
+                                      address_uz, address_ru, address_en, payment_amount, is_active) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                ''', (name_uz, name_ru, name_en, date, time, address_uz, address_ru, address_en, payment_amount))
+
+                event_id = cursor.lastrowid
+                conn.commit()
+                print(f"✅ Yangi tadbir qo'shildi: {name} (ID: {event_id})")
+                return event_id
+            except Exception as e:
+                print(f"❌ Tadbir qo'shishda xatolik: {e}")
+                return None
+
+    def get_all_active_events(self, lang='uz'):
+        """Barcha faol tadbirlarni tilga qarab olish"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute("PRAGMA table_info(events)")
+                columns = [column[1] for column in cursor.fetchall()]
+
+                if f'name_{lang}' in columns:
+                    name_field = f'name_{lang}'
+                    address_field = f'address_{lang}'
+                    query = f'''
+                        SELECT id, {name_field}, date, time, {address_field}, payment_amount, is_active, created_at
+                        FROM events 
+                        WHERE is_active = 1 
+                        ORDER BY date ASC, time ASC
+                    '''
+                else:
+                    query = '''
+                        SELECT id, name_uz, date, time, address_uz, payment_amount, is_active, created_at
+                        FROM events 
+                        WHERE is_active = 1 
+                        ORDER BY date ASC, time ASC
+                    '''
+                cursor.execute(query)
+                return cursor.fetchall()
+            except Exception as e:
+                print(f"❌ Faol tadbirlarni olishda xatolik: {e}")
+                return []
+
+    def get_event_by_id(self, event_id, lang='uz'):
+        """ID orqali tadbirni tilga qarab olish"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute("PRAGMA table_info(events)")
+                columns = [column[1] for column in cursor.fetchall()]
+
+                if f'name_{lang}' in columns:
+                    name_field = f'name_{lang}'
+                    address_field = f'address_{lang}'
+                    query = f'''
+                        SELECT id, {name_field}, date, time, {address_field}, payment_amount, is_active, created_at
+                        FROM events 
+                        WHERE id = ?
+                    '''
+                else:
+                    query = '''
+                        SELECT id, name_uz, date, time, address_uz, payment_amount, is_active, created_at
+                        FROM events 
+                        WHERE id = ?
+                    '''
+                cursor.execute(query, (event_id,))
+                return cursor.fetchone()
+            except Exception as e:
+                print(f"❌ Tadbirni ID orqali olishda xatolik: {e}")
+                return None
+
+    def toggle_event_status(self, event_id):
+        """Marosim holatini o'zgartirish"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute("SELECT is_active FROM events WHERE id = ?", (event_id,))
+                current_status = cursor.fetchone()
+                if not current_status:
+                    return False
+
+                is_currently_active = bool(current_status[0])
+                if is_currently_active:
+                    cursor.execute("UPDATE events SET is_active = 0 WHERE id = ?", (event_id,))
+                else:
+                    cursor.execute("UPDATE events SET is_active = 0")
+                    cursor.execute("UPDATE events SET is_active = 1 WHERE id = ?", (event_id,))
+
+                conn.commit()
+                return True
+            except Exception as e:
+                print(f"❌ Tadbir holatini o'zgartirishda xatolik: {e}")
+                return False
+
+    def get_events_with_stats(self, lang='uz'):
+        """Marosimlar va ularning statistikasi"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute("PRAGMA table_info(events)")
+                columns = [column[1] for column in cursor.fetchall()]
+
+                if f'name_{lang}' in columns:
+                    name_field = f'name_{lang}'
+                    address_field = f'address_{lang}'
+                    query = f'''
+                        SELECT id, {name_field}, date, time, {address_field}, payment_amount, is_active, created_at
+                        FROM events 
+                        ORDER BY id DESC
+                    '''
+                else:
+                    query = '''
+                        SELECT id, name_uz, date, time, address_uz, payment_amount, is_active, created_at
+                        FROM events 
+                        ORDER BY id DESC
+                    '''
+
+                cursor.execute(query)
+                events = cursor.fetchall()
+                events_with_stats = []
+
+                for event in events:
+                    event_id = event[0]
+
+                    # Statistikalarni hisoblash
+                    cursor.execute('SELECT COUNT(*) FROM users WHERE event_id = ?', (event_id,))
+                    total = cursor.fetchone()[0]
+
+                    cursor.execute('SELECT COUNT(*) FROM users WHERE event_id = ? AND payment_status = "paid"',
+                                   (event_id,))
+                    paid = cursor.fetchone()[0]
+
+                    cursor.execute('SELECT COUNT(*) FROM users WHERE event_id = ? AND approved = 1', (event_id,))
+                    approved = cursor.fetchone()[0]
+
+                    cursor.execute('SELECT COUNT(*) FROM users WHERE event_id = ? AND attended = 1', (event_id,))
+                    attended = cursor.fetchone()[0]
+
+                    cursor.execute(
+                        'SELECT COUNT(*) FROM users WHERE event_id = ? AND payment_status = "paid" AND approved = 0',
+                        (event_id,))
+                    pending = cursor.fetchone()[0]
+
+                    event_dict = {
+                        'id': event[0],
+                        'name': event[1],
+                        'date': event[2],
+                        'time': event[3],
+                        'address': event[4],
+                        'payment_amount': event[5],
+                        'is_active': bool(event[6]),
+                        'created_at': event[7],
+                        'stats': {
+                            'total': total,
+                            'paid': paid,
+                            'approved': approved,
+                            'attended': attended,
+                            'pending': pending
+                        }
+                    }
+                    events_with_stats.append(event_dict)
+
+                return events_with_stats
+            except Exception as e:
+                print(f"❌ Tadbirlar statistikasini olishda xatolik: {e}")
+                return []
+
+    # USER BOSHQARUVI
+    def register_user(self, telegram_id, full_name='', phone_number='', event_id=None):
+        """User ro'yxatdan o'tkazish yoki yangilash"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute('SELECT id, qr_id FROM users WHERE telegram_id = ?', (int(telegram_id),))
+                existing_user = cursor.fetchone()
+
+                if existing_user:
+                    cursor.execute('''
+                        UPDATE users SET full_name = ?, phone_number = ?, event_id = ?
+                        WHERE telegram_id = ?
+                    ''', (full_name, phone_number, event_id, int(telegram_id)))
+                    print(f"✅ User ma'lumotlari yangilandi: {telegram_id}")
+                else:
+                    qr_id = self._generate_unique_qr_id()
+                    cursor.execute('''
+                        INSERT INTO users (telegram_id, full_name, phone_number, event_id, qr_id, language) 
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    ''', (int(telegram_id), full_name, phone_number, event_id, qr_id, 'uz'))
+                    print(f"✅ Yangi user ro'yxatdan o'tdi: {telegram_id}")
+
+                conn.commit()
+                return True
+            except Exception as e:
+                print(f"❌ User ro'yxatdan o'tkazishda xatolik: {e}")
+                return False
+
+    def _generate_unique_qr_id(self):
+        """Unique QR ID yaratish"""
+        while True:
+            qr_id = datetime.now().strftime('%d%m') + str(uuid.uuid4().int)[:4]
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT id FROM users WHERE qr_id = ?', (qr_id,))
+                if not cursor.fetchone():
+                    return qr_id
+
+    def get_user(self, telegram_id):
+        """User ma'lumotlarini olish"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute('SELECT * FROM users WHERE telegram_id = ?', (int(telegram_id),))
+                return cursor.fetchone()
+            except Exception as e:
+                print(f"❌ User olishda xatolik: {e}")
+                return None
+
+    def update_payment_status(self, telegram_id, status='pending_approval'):
+        """To'lov statusini yangilash"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute('UPDATE users SET payment_status = ? WHERE telegram_id = ?',
+                               (status, int(telegram_id)))
+                if cursor.rowcount > 0:
+                    conn.commit()
+                    print(f"✅ To'lov holati yangilandi: {telegram_id} -> {status}")
+                    return True
+                else:
+                    print(f"❌ User topilmadi: {telegram_id}")
+                    return False
+            except Exception as e:
+                print(f"❌ To'lov holatini yangilashda xatolik: {e}")
+                return False
+
+    def get_pending_users(self):
+        """Kutilayotgan userlarni olish"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute('''
+                    SELECT u.*, e.name_uz as event_name 
+                    FROM users u
+                    LEFT JOIN events e ON u.event_id = e.id
+                    WHERE u.payment_status IN ('paid', 'pending_approval') AND u.approved = 0
+                    ORDER BY u.registered_at ASC
+                ''')
+                return cursor.fetchall()
+            except Exception as e:
+                print(f"❌ Kutilayotgan userlarni olishda xatolik: {e}")
+                return []
+
+    def get_all_user_stats(self):
+        """Barcha userlar statistikasi"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute('SELECT COUNT(*) FROM users')
+                total = cursor.fetchone()[0]
+
+                cursor.execute(
+                    'SELECT COUNT(*) FROM users WHERE payment_status IN ("paid", "pending_approval", "approved")')
+                paid = cursor.fetchone()[0]
+
+                cursor.execute('SELECT COUNT(*) FROM users WHERE approved = 1')
+                approved = cursor.fetchone()[0]
+
+                cursor.execute('SELECT COUNT(*) FROM users WHERE attended = 1')
+                attended = cursor.fetchone()[0]
+
+                cursor.execute(
+                    'SELECT COUNT(*) FROM users WHERE payment_status IN ("paid", "pending_approval") AND approved = 0')
+                pending = cursor.fetchone()[0]
+
+                return {
+                    'total': total,
+                    'paid': paid,
+                    'approved': approved,
+                    'attended': attended,
+                    'pending': pending
+                }
+            except Exception as e:
+                print(f"❌ Umumiy statistikani olishda xatolik: {e}")
+                return {'total': 0, 'paid': 0, 'approved': 0, 'attended': 0, 'pending': 0}
+
+    def set_user_language(self, telegram_id, language):
+        """User tilini o'rnatish"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute('SELECT id FROM users WHERE telegram_id = ?', (int(telegram_id),))
+                user_exists = cursor.fetchone()
+
+                if user_exists:
+                    cursor.execute('UPDATE users SET language = ? WHERE telegram_id = ?', (language, int(telegram_id)))
+                    if cursor.rowcount > 0:
+                        conn.commit()
+                        return True
+                else:
+                    qr_id = self._generate_unique_qr_id()
+                    cursor.execute('''
+                        INSERT INTO users (telegram_id, language, qr_id, full_name, phone_number) 
+                        VALUES (?, ?, ?, '', '')
+                    ''', (int(telegram_id), language, qr_id))
+                    conn.commit()
+                    return True
+            except Exception as e:
+                print(f"❌ User tilini o'rnatishda xatolik: {e}")
+                return False
+
+    def get_user_language(self, telegram_id):
+        """User tilini olish"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute('SELECT language FROM users WHERE telegram_id = ?', (int(telegram_id),))
+                result = cursor.fetchone()
+                return result[0] if result and result[0] else 'uz'
+            except Exception as e:
+                print(f"❌ User tilini olishda xatolik: {e}")
+                return 'uz'
+
+    def get_user_registration_status(self, telegram_id):
+        """User ro'yxatdan o'tish holatini tekshirish"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute('''
+                    SELECT qr_id, payment_status, approved, full_name, phone_number
+                    FROM users 
+                    WHERE telegram_id = ?
+                ''', (int(telegram_id),))
+                result = cursor.fetchone()
+
+                if not result:
+                    return {'exists': False, 'status': 'not_registered'}
+
+                qr_id, payment_status, approved, full_name, phone_number = result
+
+                if not full_name or not phone_number or full_name == '' or phone_number == '':
+                    status = 'not_registered'
+                elif approved == 1:
+                    status = 'approved'
+                elif payment_status in ['paid', 'pending_approval']:
+                    status = 'pending_approval'
+                elif payment_status == 'rejected':
+                    status = 'rejected'
+                else:
+                    status = 'pending_payment'
+
+                return {
+                    'exists': True,
+                    'status': status,
+                    'qr_id': qr_id,
+                    'payment_status': payment_status,
+                    'approved': approved,
+                    'full_name': full_name
+                }
+            except Exception as e:
+                print(f"❌ User statsini olishda xatolik: {e}")
+                return {'exists': False, 'status': 'error'}
+
+    # QR KOD BOSHQARUVI
+    def generate_qr_code_with_full_data(self, telegram_id):
+        """To'liq ma'lumotlar bilan QR kod yaratish"""
+        try:
+            user = self.get_user(telegram_id)
+            if not user:
+                print(f"❌ User topilmadi: {telegram_id}")
+                return None
+
+            # Event ma'lumotlarini olish
+            event = self.get_event_by_id(user[4]) if user[4] else None
+
+            # QR kod uchun to'liq ma'lumotlar
+            qr_data = {
+                "id": user[7],  # qr_id
+                "name": user[2],  # full_name
+                "phone": user[3],  # phone_number
+                "telegram_id": user[1],
+                "event": {
+                    "id": event[0] if event else None,
+                    "name": event[1] if event else "Noma'lum tadbir",
+                    "date": event[2] if event else "",
+                    "time": event[3] if event else "",
+                    "address": event[4] if event else "",
+                    "payment": event[5] if event else 0
+                },
+                "status": {
+                    "payment": user[5],  # payment_status
+                    "approved": bool(user[8]),  # approved
+                    "attended": bool(user[10]),  # attended
+                },
+                "registered": user[9],  # registered_at
+                "qr_created": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }
+
+            # JSON formatda saqlash
+            qr_json_data = json.dumps(qr_data, ensure_ascii=False, separators=(',', ':'))
+
+            # QR kod yaratish
+            qr = qrcode.QRCode(
+                version=1,
+                error_correction=qrcode.constants.ERROR_CORRECT_M,
+                box_size=10,
+                border=4,
+            )
+            qr.add_data(qr_json_data)
+            qr.make(fit=True)
+
+            # Rasm yaratish
+            img = qr.make_image(fill_color="black", back_color="white")
+            buffer = io.BytesIO()
+            img.save(buffer, format='PNG')
+
+            print(f"✅ To'liq QR kod yaratildi: {user[2]} - {event[1] if event else 'Nomalum tadbir'}")
+            return base64.b64encode(buffer.getvalue()).decode()
+
+        except Exception as e:
+            print(f"❌ To'liq QR kod yaratishda xatolik: {e}")
+            return None
+
+    def approve_user_with_full_qr(self, telegram_id, approved=True):
+        """User ni to'liq QR kod bilan tasdiqlash"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute('SELECT id, qr_id FROM users WHERE telegram_id = ?', (int(telegram_id),))
+                user_data = cursor.fetchone()
+                if not user_data:
+                    print(f"❌ Tasdiqlash uchun user topilmadi: {telegram_id}")
+                    return False
+
+                if approved:
+                    # To'liq ma'lumotlar bilan QR kod yaratish
+                    qr_code_data = self.generate_qr_code_with_full_data(telegram_id)
+                    cursor.execute('''
+                        UPDATE users SET approved = 1, qr_code = ?, payment_status = 'approved'
+                        WHERE telegram_id = ?
+                    ''', (qr_code_data, int(telegram_id)))
+                    print(f"✅ User to'liq QR kod bilan tasdiqlandi: {telegram_id}")
+                else:
+                    cursor.execute('''
+                        UPDATE users SET approved = 0, payment_status = 'rejected' 
+                        WHERE telegram_id = ?
+                    ''', (int(telegram_id),))
+                    print(f"❌ User rad etildi: {telegram_id}")
+
+                conn.commit()
+                return True
+            except Exception as e:
+                print(f"❌ User tasdiqlashda xatolik: {e}")
+                return False
+
+    def get_qr_code_image(self, telegram_id):
+        """QR kod rasmini olish"""
+        try:
+            user = self.get_user(telegram_id)
+            if not user or not user[6]:
+                return None
+            img_data = base64.b64decode(user[6])
+            return io.BytesIO(img_data)
+        except Exception as e:
+            print(f"❌ QR kod rasmini olishda xatolik: {e}")
+            return None
+
+    def parse_qr_data(self, qr_text):
+        """QR kod ma'lumotlarini parse qilish"""
+        try:
+            # JSON formatda bo'lsa
+            if qr_text.strip().startswith('{'):
+                qr_data = json.loads(qr_text)
+                return {
+                    'format': 'json',
+                    'data': qr_data,
+                    'id': qr_data.get('id'),
+                    'name': qr_data.get('name', 'N/A'),
+                    'phone': qr_data.get('phone', 'N/A'),
+                    'telegram_id': qr_data.get('telegram_id', 'N/A'),
+                    'event': qr_data.get('event', {}),
+                    'status': qr_data.get('status', {}),
+                    'registered': qr_data.get('registered', 'N/A'),
+                    'qr_created': qr_data.get('qr_created', 'N/A')
+                }
+            else:
+                # Oddiy format (faqat ID)
+                qr_id = qr_text.split(':')[0] if ':' in qr_text else qr_text
+                return {
+                    'format': 'simple',
+                    'data': qr_text,
+                    'id': qr_id,
+                    'name': 'N/A',
+                    'phone': 'N/A',
+                    'telegram_id': 'N/A',
+                    'event': {},
+                    'status': {},
+                    'registered': 'N/A',
+                    'qr_created': 'N/A'
+                }
+        except Exception as e:
+            print(f"❌ QR parse xatolik: {e}")
+            # Xatolik bo'lganda oddiy format sifatida qaytarish
+            qr_id = qr_text.split(':')[0] if ':' in qr_text else qr_text
+            return {
+                'format': 'error',
+                'data': qr_text,
+                'id': qr_id,
+                'name': 'Parse Error',
+                'phone': 'N/A',
+                'telegram_id': 'N/A',
+                'event': {},
+                'status': {},
+                'registered': 'N/A',
+                'qr_created': 'N/A'
+            }
+
+    def mark_user_attended_with_full_data(self, qr_data, scanner_name='Admin'):
+        """To'liq ma'lumotlar bilan kelganlik belgilash"""
+        try:
+            now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+            # QR ma'lumotlarini parse qilish
+            parsed_qr = self.parse_qr_data(qr_data)
+            qr_id = parsed_qr['id']
+
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT telegram_id, full_name, attended, event_id 
+                    FROM users WHERE qr_id = ?
+                ''', (qr_id,))
+                user_data = cursor.fetchone()
+
+                if not user_data:
+                    print(f"❌ QR ID topilmadi: {qr_id}")
+                    return False, None, None, parsed_qr
+
+                telegram_id, full_name, already_attended, user_event_id = user_data
+
+                # Event ma'lumotlarini olish
+                event = self.get_event_by_id(user_event_id) if user_event_id else None
+                event_name = event[1] if event else "Noma'lum marosim"
+
+                if already_attended == 1:
+                    print(f"⚠️ User allaqachon kelgan: {full_name} - {event_name}")
+                    return True, full_name, event_name, parsed_qr
+
+                # Kelganlik belgilash
+                cursor.execute('''
+                    UPDATE users SET attended = 1, attended_at = ?, attended_by = ?
+                    WHERE qr_id = ? AND event_id = ?
+                ''', (now, scanner_name, qr_id, user_event_id))
+
+                if cursor.rowcount > 0:
+                    conn.commit()
+                    print(f"✅ Kelganlik belgilandi: {full_name} - {event_name} ({scanner_name})")
+                    return True, full_name, event_name, parsed_qr
+                else:
+                    print(f"❌ Kelganlik belgilashda xatolik: {qr_id}")
+                    return False, None, None, parsed_qr
+
+        except Exception as e:
+            print(f"❌ Kelganlik belgilashda database xatolik: {e}")
+            return False, None, None, {'format': 'error', 'data': qr_data}
+
+    def convert_all_qr_to_json_format(self):
+        """Barcha mavjud QR kodlarni JSON formatga o'zgartirish"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                # Barcha tasdiqlangan userlarni olish
+                cursor.execute('''
+                    SELECT telegram_id, qr_id, approved, qr_code 
+                    FROM users 
+                    WHERE approved = 1 AND qr_id IS NOT NULL
+                ''')
+
+                users = cursor.fetchall()
+                print(f"🔄 {len(users)} ta QR kodni JSON formatga o'zgartirish boshlandi...")
+
+                converted_count = 0
+                for user in users:
+                    telegram_id, qr_id, approved, existing_qr_code = user
+
+                    try:
+                        # Yangi JSON QR kod yaratish
+                        new_qr_code = self.generate_qr_code_with_full_data(telegram_id)
+
+                        if new_qr_code:
+                            # Database da yangilash
+                            cursor.execute('''
+                                UPDATE users SET qr_code = ? WHERE telegram_id = ?
+                            ''', (new_qr_code, telegram_id))
+
+                            converted_count += 1
+                            print(f"✅ Converted: {qr_id} -> JSON format")
+
+                    except Exception as e:
+                        print(f"❌ Xatolik {qr_id}: {e}")
+                        continue
+
+                conn.commit()
+                print(f"🎉 {converted_count} ta QR kod muvaffaqiyatli o'zgartirildi!")
+                return converted_count
+
+        except Exception as e:
+            print(f"❌ Conversion xatolik: {e}")
+            return 0
+
+    # LEGACY METHODS (eski kod bilan mos kelish uchun)
+    def add_channel(self, channel_id, channel_name):
+        """Eski kanal qo'shish metodi - faqat test uchun"""
+        print(f"⚠️ Eski add_channel metodi ishlatildi. add_channel_smart() dan foydalaning.")
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute('INSERT INTO channels (channel_id, channel_name) VALUES (?, ?)',
+                               (channel_id, channel_name))
+                conn.commit()
+                return True
+            except sqlite3.IntegrityError:
+                return False
+            except Exception as e:
+                print(f"❌ Kanal qo'shishda xatolik: {e}")
+                return False
+
+    def approve_user(self, telegram_id, approved=True):
+        """User ni tasdiqlash (eski metod)"""
+        return self.approve_user_with_full_qr(telegram_id, approved)
+
+    def generate_qr_code(self, telegram_id):
+        """QR kod yaratish (eski metod)"""
+        return self.generate_qr_code_with_full_data(telegram_id)
+
+    def mark_user_attended(self, qr_data, scanner_name='Admin'):
+        """Kelganlik belgilash (eski metod)"""
+        return self.mark_user_attended_with_full_data(qr_data, scanner_name)
+
+    # UTILITY METHODS
+    def backup_database(self):
+        """Ma'lumotlar bazasini zahiralash"""
+        try:
+            import shutil
+            backup_dir = "db/backups"
+            os.makedirs(backup_dir, exist_ok=True)
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            backup_path = f"{backup_dir}/database_backup_{timestamp}.db"
+            shutil.copy2(self.db_path, backup_path)
+            print(f"✅ Database zahiralandi: {backup_path}")
+            return backup_path
+        except Exception as e:
+            print(f"❌ Database zahiralashda xatolik: {e}")
+            return None
+
+    def debug_events_status(self):
+        """Debug: tadbirlar holatini tekshirish"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute('SELECT id, name_uz, is_active FROM events ORDER BY id DESC')
+                return cursor.fetchall()
+            except Exception as e:
+                print(f"❌ Debug events xatolik: {e}")
+                return []

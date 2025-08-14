@@ -1,0 +1,1241 @@
+from aiogram import types, Dispatcher
+from aiogram.dispatcher import FSMContext
+from aiogram.dispatcher.filters.state import State, StatesGroup
+from aiogram.dispatcher.filters import Command, Text
+from data import config
+from utils.db_api.database import Database
+from keyboards.default.keyboards import get_admin_keyboard, get_main_menu
+from datetime import datetime
+
+# Google Sheets import
+try:
+    from sheets_integration import (
+        save_user_with_qr_to_sheets,
+        scan_qr_and_mark_attendance,
+        get_sheets_url,
+        clear_sheets_data
+    )
+
+    SHEETS_MODE = True
+    print("✅ Google Sheets integratsiyasi faol")
+except ImportError:
+    SHEETS_MODE = False
+    print("❌ Google Sheets integratsiyasi faol emas")
+
+
+class AdminStates(StatesGroup):
+    """Admin holatlari - yangilangan"""
+    waiting_for_event_language = State()
+    waiting_for_event_name = State()
+    waiting_for_event_date = State()
+    waiting_for_event_time = State()
+    waiting_for_event_address = State()
+    waiting_for_event_payment = State()
+    qr_scanner_mode = State()
+    waiting_for_channel_input = State()  # Faqat bitta kanal state
+
+
+def is_admin(user_id):
+    """Admin tekshirish"""
+    return user_id in config.ADMINS
+
+
+def get_language_selection_keyboard():
+    """Til tanlash klaviaturasi"""
+    keyboard = types.InlineKeyboardMarkup(row_width=3)
+    keyboard.add(
+        types.InlineKeyboardButton("🇺🇿 O'zbek", callback_data='event_lang_uz'),
+        types.InlineKeyboardButton("🇷🇺 Русский", callback_data='event_lang_ru'),
+        types.InlineKeyboardButton("🇺🇸 English", callback_data='event_lang_en')
+    )
+    return keyboard
+
+
+def get_event_texts(lang):
+    """Tadbir matnlari"""
+    texts = {
+        'uz': {
+            'enter_name': '🎪 Tadbir nomini kiriting:',
+            'enter_date': '📅 Sanani kiriting (2024-12-25):',
+            'enter_time': '🕐 Vaqtni kiriting (18:00):',
+            'enter_address': '📍 Manzilni kiriting:',
+            'enter_payment': '💰 To\'lov summasini kiriting (50000):',
+            'invalid_number': '❌ Raqam kiriting! Masalan: 50000',
+            'event_added': '✅ Tadbir qo\'shildi!',
+            'name': 'Nom', 'date': 'Sana', 'time': 'Vaqt',
+            'address': 'Manzil', 'payment': 'To\'lov'
+        },
+        'ru': {
+            'enter_name': '🎪 Введите название события:',
+            'enter_date': '📅 Введите дату (2024-12-25):',
+            'enter_time': '🕐 Введите время (18:00):',
+            'enter_address': '📍 Введите адрес:',
+            'enter_payment': '💰 Введите сумму оплаты (50000):',
+            'invalid_number': '❌ Введите число! Например: 50000',
+            'event_added': '✅ Событие добавлено!',
+            'name': 'Название', 'date': 'Дата', 'time': 'Время',
+            'address': 'Адрес', 'payment': 'Оплата'
+        },
+        'en': {
+            'enter_name': '🎪 Enter event name:',
+            'enter_date': '📅 Enter date (2024-12-25):',
+            'enter_time': '🕐 Enter time (18:00):',
+            'enter_address': '📍 Enter address:',
+            'enter_payment': '💰 Enter payment amount (50000):',
+            'invalid_number': '❌ Enter number! Example: 50000',
+            'event_added': '✅ Event added!',
+            'name': 'Name', 'date': 'Date', 'time': 'Time',
+            'address': 'Address', 'payment': 'Payment'
+        }
+    }
+    return texts.get(lang, texts['uz'])
+
+
+def get_user_approval_message(user, event, lang='uz'):
+    """Foydalanuvchi tasdiqlash xabari"""
+    texts = {
+        'uz': f"""✅ <b>Tabriklaymiz!</b> To'lovingiz tasdiqlandi.
+Bu QR sizning to'liq elektron chiptangiz.
+
+🎟 <b>Ishtirokchi:</b> {user[2]}
+📱 <b>Telefon:</b> {user[3]}
+🎪 <b>Tadbir:</b> {event[1] if event else "Noma'lum marosim"}
+📅 <b>Sana:</b> {event[2] if event else 'N/A'} {event[3] if event else ''}
+📍 <b>Manzil:</b> {event[4] if event else 'N/A'}
+💰 <b>Narx:</b> {event[5] if event else 0:,.0f} UZS
+🆔 <b>Chipta raqami:</b> <code>{user[7]}</code>
+
+<b>🔥 YANGILIK!</b>
+QR kodingizda barcha ma'lumotlaringiz mavjud.
+
+<b>⚠️ MUHIM!</b>
+Chipta ma'lumotlaringizni sir saqlang!""",
+
+        'ru': f"""✅ <b>Поздравляем!</b> Ваша оплата подтверждена.
+Этот QR — ваш полный электронный билет.
+
+🎟 <b>Участник:</b> {user[2]}
+📱 <b>Телефон:</b> {user[3]}
+🎪 <b>Мероприятие:</b> {event[1] if event else "Неизвестное событие"}
+📅 <b>Дата:</b> {event[2] if event else 'N/A'} {event[3] if event else ''}
+📍 <b>Адрес:</b> {event[4] if event else 'N/A'}
+💰 <b>Цена:</b> {event[5] if event else 0:,.0f} UZS
+🆔 <b>Номер билета:</b> <code>{user[7]}</code>
+
+<b>🔥 НОВИНКА!</b>
+В вашем QR-коде содержится вся информация.
+
+<b>⚠️ ВАЖНО!</b>
+Храните данные билета в секрете!""",
+
+        'en': f"""✅ <b>Congratulations!</b> Your payment has been confirmed.
+This QR is your complete e-ticket.
+
+🎟 <b>Participant:</b> {user[2]}
+📱 <b>Phone:</b> {user[3]}
+🎪 <b>Event:</b> {event[1] if event else "Unknown event"}
+📅 <b>Date:</b> {event[2] if event else 'N/A'} {event[3] if event else ''}
+📍 <b>Address:</b> {event[4] if event else 'N/A'}
+💰 <b>Price:</b> {event[5] if event else 0:,.0f} UZS
+🆔 <b>Ticket number:</b> <code>{user[7]}</code>
+
+<b>🔥 NEW!</b>
+Your QR code contains all your information.
+
+<b>⚠️ IMPORTANT!</b>
+Keep your ticket information confidential!"""
+    }
+    return texts.get(lang, texts['uz'])
+
+
+async def safe_send_to_user(bot, user_id, message, qr_image=None):
+    """Xavfsiz foydalanuvchiga yuborish"""
+    try:
+        if qr_image:
+            await bot.send_photo(user_id, qr_image, caption=message, parse_mode='HTML')
+        else:
+            await bot.send_message(user_id, message, parse_mode='HTML')
+        return True
+    except Exception as e:
+        print(f"⚠️ Foydalanuvchiga yuborishda xatolik: {e}")
+        return False
+
+
+async def update_sheets_data(user_info, event_info):
+    """Google Sheets yangilash"""
+    if not SHEETS_MODE:
+        return False
+
+    try:
+        success, qr_id = save_user_with_qr_to_sheets(user_info, event_info)
+        print(f"📊 Google Sheets: {'✅ Yangilandi' if success else '❌ Xatolik'}")
+        return success
+    except Exception as e:
+        print(f"⚠️ Sheets xatolik: {e}")
+        return False
+
+
+# ASOSIY ADMIN HANDLERLAR
+
+async def admin_panel(message: types.Message):
+    """Admin panel"""
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ Bu komanda faqat adminlar uchun!")
+        return
+
+    try:
+        db = Database()
+        stats = db.get_all_user_stats()
+        sheets_status = "✅ Ulangi" if SHEETS_MODE else "❌ Ulanmagan"
+
+        info = (
+            f"🛠 Admin Panel\n\n"
+            f"📊 Statistika:\n"
+            f"👥 Jami: {stats['total']}\n"
+            f"✅ Tasdiqlangan: {stats['approved']}\n"
+            f"⏳ Kutilayotgan: {stats['pending']}\n"
+            f"🎪 Kelganlar: {stats['attended']}\n\n"
+            f"📋 Google Sheets: {sheets_status}\n\n"
+            f"Tugmalardan birini tanlang:"
+        )
+
+        await message.answer(info, reply_markup=get_admin_keyboard())
+    except Exception as e:
+        await message.answer(f"❌ Xatolik: {e}")
+
+
+async def qr_scanner_start(message: types.Message):
+    """QR skaner boshlash"""
+    if not is_admin(message.from_user.id):
+        return
+
+    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    keyboard.add("📱 QR Stop")
+
+    await message.answer(
+        "📱 QR Skaner ishga tushdi!\n\n"
+        "🔍 ID raqamni kiriting:\n"
+        "Masalan: 123456\n\n"
+        "Mehmon kelganini belgilash uchun ID ni yuboring.",
+        reply_markup=keyboard
+    )
+    await AdminStates.qr_scanner_mode.set()
+
+
+async def qr_scanner_stop(message: types.Message, state: FSMContext):
+    """QR skaner to'xtatish"""
+    if not is_admin(message.from_user.id):
+        return
+
+    await state.finish()
+    await message.answer("📱 QR Skaner to'xtatildi!", reply_markup=get_admin_keyboard())
+
+
+async def qr_scan_handler(message: types.Message, state: FSMContext):
+    """QR kod skanerlash"""
+    if not is_admin(message.from_user.id):
+        return
+
+    text = message.text.strip()
+    if not text:
+        await message.answer("❌ QR kod ma'lumotini yuboring!")
+        return
+
+    qr_id = text.split(':')[0] if ':' in text else text
+
+    try:
+        db = Database()
+
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Ma'lumotlarni olish
+            cursor.execute('''
+                SELECT u.full_name, u.phone_number, u.payment_status, u.attended,
+                       e.name_uz, e.address_uz, e.payment_amount, u.telegram_id, u.event_id
+                FROM users u
+                LEFT JOIN events e ON u.event_id = e.id
+                WHERE u.qr_id = ?
+            ''', (qr_id,))
+
+            result = cursor.fetchone()
+
+            if not result:
+                await message.answer(
+                    f"❌ <b>QR KOD TOPILMADI!</b>\n\n"
+                    f"🆔 <b>ID:</b> <code>{qr_id}</code>\n\n"
+                    f"⚠️ Bu ma'lumot jadvalda yo'q.",
+                    parse_mode='HTML'
+                )
+                return
+
+            # Ma'lumotlarni ajratish
+            full_name, phone, payment_status, attended, event_name, event_address, event_payment, telegram_id, event_id = result
+
+            # Kelganlik belgilash
+            if not attended:
+                now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                admin_name = f"Admin_{message.from_user.first_name}"
+
+                cursor.execute('''
+                    UPDATE users SET attended = 1, attended_at = ?, attended_by = ?
+                    WHERE qr_id = ?
+                ''', (now, admin_name, qr_id))
+                conn.commit()
+
+                print(f"✅ Kelganlik belgilandi: {full_name} - {event_name}")
+
+                # Google Sheets yangilash
+                if SHEETS_MODE:
+                    try:
+                        scan_qr_and_mark_attendance(qr_id, admin_name)
+                    except Exception as sheets_error:
+                        print(f"⚠️ Sheets xatolik: {sheets_error}")
+
+            # Javob matnini yaratish
+            qr_display = (
+                f"👤 <b>Ism:</b> {full_name or 'N/A'}\n"
+                f"📱 <b>Telefon:</b> {phone or 'N/A'}\n"
+                f"🆔 <b>Chipta ID:</b> <code>{qr_id}</code>\n\n"
+                f"🎪 <b>Tadbir:</b> {event_name or 'N/A'}\n"
+                f"📍 <b>Manzil:</b> {event_address or 'N/A'}\n"
+                f"💰 <b>Narx:</b> {event_payment or 0:,.0f} UZS\n"
+                f"✅ <b>To'lov:</b> {payment_status or 'N/A'}"
+            )
+
+            await message.answer(
+                f"✅ <b>MEHMON KELGANLIGI BELGILANDI!</b>\n\n"
+                f"📋 <b>QR KODI MA'LUMOTLARI:</b>\n{qr_display}\n\n"
+                f"📱 Keyingi QR kodni skanerlang.",
+                parse_mode='HTML'
+            )
+
+    except Exception as e:
+        print(f"❌ QR Scan xatolik: {e}")
+        await message.answer(
+            f"❌ <b>TIZIM XATOLIGI!</b>\n\n"
+            f"🆔 <b>QR Data:</b> <code>{text[:50]}...</code>\n"
+            f"🔄 Qayta urinib ko'ring.",
+            parse_mode='HTML'
+        )
+
+
+async def approve_user_handler(message: types.Message):
+    """User ni tasdiqlash"""
+    if not is_admin(message.from_user.id):
+        return
+
+    try:
+        user_id = int(message.text.split('_')[1])
+        db = Database()
+        user = db.get_user(user_id)
+
+        if not user:
+            await message.answer("❌ User topilmadi!")
+            return
+
+        # Event ma'lumotlari
+        event = db.get_event_by_id(user[4]) if user[4] else None
+        event_name = event[1] if event else "Noma'lum marosim"
+
+        # Tasdiqlash
+        success = db.approve_user_with_full_qr(user_id, approved=True)
+        if not success:
+            await message.answer("❌ User tasdiqlashda xatolik!")
+            return
+
+        # QR kod olish
+        qr_image = db.get_qr_code_image(user_id)
+        lang = user[13] if len(user) > 13 and user[13] else 'uz'
+
+        # Foydalanuvchiga yuborish
+        user_message = get_user_approval_message(user, event, lang)
+        sent = await safe_send_to_user(message.bot, user_id, user_message, qr_image)
+
+        # Google Sheets yangilash
+        if SHEETS_MODE:
+            user_info = {
+                'telegram_id': user[1], 'full_name': user[2], 'phone': user[3],
+                'payment_status': 'paid', 'qr_id': user[7], 'registered_at': user[9],
+                'event_id': user[4]
+            }
+            event_info = {
+                'name': event_name, 'payment_amount': event[5] if event else 100000,
+                'date': event[2] if event else '', 'time': event[3] if event else '',
+                'address': event[4] if event else ''
+            }
+            sheets_success = await update_sheets_data(user_info, event_info)
+
+        # Admin ga javob
+        admin_message = (
+            f"✅ <b>USER TASDIQLANDI!</b>\n\n"
+            f"👤 <b>Ism:</b> {user[2]}\n"
+            f"📱 <b>Telefon:</b> {user[3]}\n"
+            f"🎪 <b>Marosim:</b> {event_name}\n"
+            f"🆔 <b>Chipta ID:</b> <code>{user[7]}</code>\n\n"
+            f"📊 Google Sheets: {'✅' if SHEETS_MODE and 'sheets_success' in locals() and sheets_success else '❌'}\n"
+            f"📱 Foydalanuvchiga: {'✅' if sent else '❌'}"
+        )
+
+        await message.answer(admin_message, parse_mode='HTML')
+
+    except Exception as e:
+        await message.answer(f"❌ Xatolik: {e}")
+
+
+async def reject_user_handler(message: types.Message):
+    """User ni rad etish"""
+    if not is_admin(message.from_user.id):
+        return
+
+    try:
+        user_id = int(message.text.split('_')[1])
+        db = Database()
+        user = db.get_user(user_id)
+
+        if not user:
+            await message.answer("❌ User topilmadi!")
+            return
+
+        db.approve_user(user_id, approved=False)
+
+        # User ga xabar
+        await safe_send_to_user(
+            message.bot, user_id,
+            "❌ Afsuski, to'lovingiz tasdiqlanmadi.\n\n📞 Admin bilan bog'laning."
+        )
+
+        await message.answer(f"❌ User {user[2]} rad etildi!")
+
+    except Exception as e:
+        await message.answer(f"❌ Xatolik: {e}")
+
+
+async def approve_user_callback(callback_query: types.CallbackQuery):
+    """Inline tugma orqali user tasdiqlash"""
+    if not is_admin(callback_query.from_user.id):
+        await callback_query.answer("❌ Ruxsat yo'q!")
+        return
+
+    try:
+        user_id = int(callback_query.data.split('_')[1])  # approve_123 -> 123
+        db = Database()
+        user = db.get_user(user_id)
+
+        if not user:
+            await callback_query.answer("❌ User topilmadi!")
+            return
+
+        # Event ma'lumotlari
+        event = db.get_event_by_id(user[4]) if user[4] else None
+        event_name = event[1] if event else "Noma'lum marosim"
+
+        # Tasdiqlash
+        success = db.approve_user_with_full_qr(user_id, approved=True)
+        if not success:
+            await callback_query.answer("❌ User tasdiqlashda xatolik!")
+            return
+
+        # QR kod olish
+        qr_image = db.get_qr_code_image(user_id)
+        lang = user[13] if len(user) > 13 and user[13] else 'uz'
+
+        # Foydalanuvchiga yuborish
+        user_message = get_user_approval_message(user, event, lang)
+        sent = await safe_send_to_user(callback_query.bot, user_id, user_message, qr_image)
+
+        # Google Sheets yangilash
+        sheets_success = False
+        if SHEETS_MODE:
+            user_info = {
+                'telegram_id': user[1], 'full_name': user[2], 'phone': user[3],
+                'payment_status': 'paid', 'qr_id': user[7], 'registered_at': user[9],
+                'event_id': user[4]
+            }
+            event_info = {
+                'name': event_name, 'payment_amount': event[5] if event else 100000,
+                'date': event[2] if event else '', 'time': event[3] if event else '',
+                'address': event[4] if event else ''
+            }
+            sheets_success = await update_sheets_data(user_info, event_info)
+
+        # Admin ga javob
+        admin_message = (
+            f"✅ <b>USER TASDIQLANDI!</b>\n\n"
+            f"👤 <b>Ism:</b> {user[2]}\n"
+            f"📱 <b>Telefon:</b> {user[3]}\n"
+            f"🎪 <b>Marosim:</b> {event_name}\n"
+            f"🆔 <b>Chipta ID:</b> <code>{user[7]}</code>\n\n"
+            f"📊 Google Sheets: {'✅' if SHEETS_MODE and sheets_success else '❌'}\n"
+            f"📱 Foydalanuvchiga: {'✅' if sent else '❌'}"
+        )
+
+        # Original xabarni yangilash
+        await callback_query.message.edit_text(admin_message, parse_mode='HTML')
+        await callback_query.answer("✅ User tasdiqlandi!")
+
+    except Exception as e:
+        await callback_query.answer(f"❌ Xatolik: {e}")
+        print(f"❌ approve_user_callback xatolik: {e}")
+
+
+async def reject_user_callback(callback_query: types.CallbackQuery):
+    """Inline tugma orqali user rad etish"""
+    if not is_admin(callback_query.from_user.id):
+        await callback_query.answer("❌ Ruxsat yo'q!")
+        return
+
+    try:
+        user_id = int(callback_query.data.split('_')[1])  # reject_123 -> 123
+        db = Database()
+        user = db.get_user(user_id)
+
+        if not user:
+            await callback_query.answer("❌ User topilmadi!")
+            return
+
+        # Rad etish
+        db.approve_user(user_id, approved=False)
+
+        # User ga xabar
+        await safe_send_to_user(
+            callback_query.bot, user_id,
+            "❌ Afsuski, to'lovingiz tasdiqlanmadi.\n\n📞 Admin bilan bog'laning."
+        )
+
+        # Admin ga javob
+        admin_message = (
+            f"❌ <b>USER RAD ETILDI!</b>\n\n"
+            f"👤 <b>Ism:</b> {user[2]}\n"
+            f"📱 <b>Telefon:</b> {user[3]}\n"
+            f"🆔 <b>User ID:</b> {user_id}\n\n"
+            f"📱 Foydalanuvchiga xabar yuborildi"
+        )
+
+        # Original xabarni yangilash
+        await callback_query.message.edit_text(admin_message, parse_mode='HTML')
+        await callback_query.answer("❌ User rad etildi!")
+
+    except Exception as e:
+        await callback_query.answer(f"❌ Xatolik: {e}")
+        print(f"❌ reject_user_callback xatolik: {e}")
+
+
+async def stats_handler(message: types.Message):
+    """Statistika"""
+    if not is_admin(message.from_user.id):
+        return
+
+    try:
+        db = Database()
+        overall_stats = db.get_all_user_stats()
+        events_with_stats = db.get_events_with_stats()
+
+        stats_text = (
+            f"📊 <b>UMUMIY STATISTIKA</b>\n\n"
+            f"👥 <b>Jami:</b> {overall_stats['total']}\n"
+            f"💳 <b>To'lov qilganlar:</b> {overall_stats['paid']}\n"
+            f"✅ <b>Tasdiqlangan:</b> {overall_stats['approved']}\n"
+            f"🎪 <b>Kelganlar:</b> {overall_stats['attended']}\n"
+            f"⏳ <b>Kutilayotgan:</b> {overall_stats['pending']}\n\n"
+        )
+
+        # Faol marosimlar
+        if events_with_stats:
+            active_events = [e for e in events_with_stats if e['is_active']]
+            if active_events:
+                stats_text += f"🎪 <b>FAOL MAROSIMLAR:</b>\n\n"
+                for event in active_events[:3]:
+                    stats = event['stats']
+                    attendance_rate = round(
+                        (stats['attended'] / stats['approved'] * 100) if stats['approved'] > 0 else 0, 1
+                    )
+                    stats_text += (
+                        f"🎪 <b>{event['name'][:25]}{'...' if len(event['name']) > 25 else ''}</b>\n"
+                        f"📅 {event['date']} {event['time']}\n"
+                        f"👥 {stats['total']} | ✅ {stats['approved']} | 🎪 {stats['attended']} ({attendance_rate}%)\n\n"
+                    )
+
+        stats_text += f"📋 <b>Google Sheets:</b> {'✅ Ulangi' if SHEETS_MODE else '❌ Ulanmagan'}"
+
+        # Keyboard
+        keyboard = types.InlineKeyboardMarkup()
+        if SHEETS_MODE:
+            sheets_url = get_sheets_url()
+            if sheets_url:
+                keyboard.add(types.InlineKeyboardButton("📊 Jadvalni ochish", url=sheets_url))
+
+        await message.answer(stats_text, reply_markup=keyboard, parse_mode='HTML')
+
+    except Exception as e:
+        await message.answer(f"❌ Xatolik: {e}")
+
+
+async def pending_payments_handler(message: types.Message):
+    """Kutilayotgan to'lovlar"""
+    if not is_admin(message.from_user.id):
+        return
+
+    try:
+        db = Database()
+        pending_users = db.get_pending_users()
+
+        if not pending_users:
+            await message.answer("✅ Kutilayotgan to'lovlar yo'q!")
+            return
+
+        await message.answer(f"⏳ Kutilayotgan: {len(pending_users)} ta")
+
+        for user in pending_users:
+            user_info = (
+                f"👤 Ism: {user[2]}\n"
+                f"📱 Telefon: {user[3]}\n"
+                f"🆔 Telegram ID: {user[1]}\n"
+                f"🎫 QR ID: {user[7]}\n\n"
+                f"✅ Tasdiqlash: /approve_{user[1]}\n"
+                f"❌ Rad etish: /reject_{user[1]}"
+            )
+            await message.answer(user_info)
+
+    except Exception as e:
+        await message.answer(f"❌ Xatolik: {e}")
+
+
+# MAROSIMLAR BOSHQARUVI
+
+async def events_management_handler(message: types.Message):
+    """Marosimlar boshqaruvi"""
+    if not is_admin(message.from_user.id):
+        return
+
+    try:
+        db = Database()
+        events_with_stats = db.get_events_with_stats()
+
+        if not events_with_stats:
+            keyboard = types.InlineKeyboardMarkup()
+            keyboard.add(types.InlineKeyboardButton("🎪 Yangi marosim qo'shish", callback_data="add_event"))
+            await message.answer(
+                "📅 <b>Hozirda marosimlar yo'q.</b>\n\n"
+                "🎪 Yangi marosim qo'shish uchun pastdagi tugmani bosing.",
+                parse_mode='HTML', reply_markup=keyboard
+            )
+            return
+
+        # Marosimlar ro'yxati
+        events_text = "🎪 <b>MAROSIMLAR BOSHQARUVI</b>\n\n"
+
+        for event in events_with_stats:
+            status = "🟢 Faol" if event['is_active'] else "🔴 Nofaol"
+            stats = event['stats']
+            events_text += (
+                f"{status} <b>{event['name']}</b>\n"
+                f"📅 {event['date']} {event['time']}\n"
+                f"💰 {event['payment_amount']:,.0f} UZS\n"
+                f"👥 Jami: {stats['total']} | ✅ Tasdiqlangan: {stats['approved']} | 🎪 Kelgan: {stats['attended']}\n\n"
+            )
+
+        # Klaviatura
+        keyboard = types.InlineKeyboardMarkup(row_width=2)
+        keyboard.add(types.InlineKeyboardButton("🎪 Yangi marosim", callback_data="add_event"))
+
+        for event in events_with_stats:
+            event_id = event['id']
+            event_name = event['name'][:20] + "..." if len(event['name']) > 20 else event['name']
+
+            detail_btn = types.InlineKeyboardButton(f"📋 {event_name}", callback_data=f"event_detail_{event_id}")
+            status_emoji = "🔴" if event['is_active'] else "🟢"
+            status_btn = types.InlineKeyboardButton(f"{status_emoji} O'zgartirish",
+                                                    callback_data=f"toggle_event_{event_id}")
+
+            keyboard.add(detail_btn, status_btn)
+
+        await message.answer(events_text, reply_markup=keyboard, parse_mode='HTML')
+
+    except Exception as e:
+        await message.answer(f"❌ Xatolik: {e}")
+
+
+async def add_event_handler(message: types.Message):
+    """Tadbir qo'shish"""
+    if not is_admin(message.from_user.id):
+        return
+
+    await message.answer("🌐 Qaysi tilda tadbir qo'shasiz?", reply_markup=get_language_selection_keyboard())
+    await AdminStates.waiting_for_event_language.set()
+
+
+# KANALLAR BOSHQARUVI
+
+async def channels_management_handler(message: types.Message):
+    """Kanallar boshqaruvi"""
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ Bu komanda faqat adminlar uchun!")
+        return
+
+    try:
+        db = Database()
+        channels = db.get_all_channels()
+
+        channels_text = "📢 <b>KANALLAR BOSHQARUVI</b>\n\n"
+
+        if not channels:
+            channels_text += "❌ Hozirda kanallar yo'q.\n\n"
+        else:
+            for channel_id, channel_name, channel_username, channel_type in channels:
+                channels_text += f"📢 <b>{channel_name}</b>\n"
+                channels_text += f"🆔 ID: <code>{channel_id}</code>\n"
+                channels_text += f"🔗 Username: @{channel_username or 'yoq'}\n"
+                channels_text += f"📊 Turi: {channel_type}\n\n"
+
+        keyboard = types.InlineKeyboardMarkup(row_width=1)
+        keyboard.add(types.InlineKeyboardButton("➕ Kanal qo'shish", callback_data="add_channel"))
+
+        if channels:
+            for channel_id, channel_name, channel_username, channel_type in channels:
+                channel_name_short = channel_name[:15] + "..." if len(channel_name) > 15 else channel_name
+                keyboard.add(types.InlineKeyboardButton(
+                    f"❌ {channel_name_short} ni o'chirish",
+                    callback_data=f"remove_channel_{channel_id}"
+                ))
+
+        await message.answer(channels_text, reply_markup=keyboard, parse_mode='HTML')
+
+    except Exception as e:
+        await message.answer(f"❌ Xatolik: {e}")
+
+
+async def add_channel_callback(callback_query: types.CallbackQuery):
+    """Kanal qo'shish callback"""
+    if not is_admin(callback_query.from_user.id):
+        await callback_query.answer("❌ Ruxsat yo'q!")
+        return
+
+    help_text = (
+        "📢 <b>Kanal qo'shish</b>\n\n"
+        "🔗 <b>Qo'llab-quvvatlanadigan formatlar:</b>\n"
+        "• <code>@kanal_nomi</code>\n"
+        "• <code>kanal_nomi</code>\n"
+        "• <code>t.me/kanal_nomi</code>\n"
+        "• <code>-100123456789</code> (ID)\n\n"
+        "❌ <b>Qo'llab-quvvatlanmaydigan:</b>\n"
+        "• <code>t.me/joinchat/...</code>\n"
+        "• <code>t.me/+...</code>\n"
+        "• <code>https://t.me/public</code>\n\n"
+        "💡 <b>Maslahat:</b> Kanal username yoki ID dan foydalaning!\n\n"
+        "👇 <b>Kanal link yoki ID sini yuboring:</b>"
+    )
+
+    await callback_query.message.answer(help_text, parse_mode='HTML')
+    await AdminStates.waiting_for_channel_input.set()
+    await callback_query.answer()
+
+
+async def process_channel_input(message: types.Message, state: FSMContext):
+    """Improved channel input processing with better error handling"""
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ Access denied!")
+        await state.finish()
+        return
+
+    channel_input = message.text.strip()
+
+    if not channel_input:
+        await message.answer("❌ Please provide a channel link or ID!")
+        return
+
+    try:
+        # Show loading message
+        loading_msg = await message.answer("🔄 Checking channel...")
+
+        db = Database()
+        # CRITICAL: Ensure this is awaited properly
+        result = await db.add_channel_smart(message.bot, channel_input)
+
+        # Clean up loading message
+        try:
+            await loading_msg.delete()
+        except:
+            pass
+
+        # Send result
+        await message.answer(
+            result['message'],
+            reply_markup=get_admin_keyboard(),
+            parse_mode='HTML'
+        )
+
+    except Exception as e:
+        try:
+            await loading_msg.delete()
+        except:
+            pass
+
+        await message.answer(
+            f"❌ Unexpected error!\n\nInput: {channel_input}\nError: {str(e)}\n\nPlease try again.",
+            reply_markup=get_admin_keyboard()
+        )
+    finally:
+        await state.finish()
+
+
+
+
+async def remove_channel_callback(callback_query: types.CallbackQuery):
+    """Kanal o'chirish callback"""
+    if not is_admin(callback_query.from_user.id):
+        await callback_query.answer("❌ Ruxsat yo'q!")
+        return
+
+    try:
+        # Channel ID ni olish (callback_data: "remove_channel_@channelname" yoki "remove_channel_-100123")
+        callback_parts = callback_query.data.split('_', 2)
+        if len(callback_parts) >= 3:
+            channel_id = callback_parts[2]
+        else:
+            await callback_query.answer("❌ Xatolik: Channel ID topilmadi!")
+            return
+
+        db = Database()
+        success = db.remove_channel(channel_id)
+
+        if success:
+            await callback_query.answer("✅ Kanal o'chirildi!")
+            # Yangilangan ro'yxatni ko'rsatish
+            await channels_management_handler(callback_query.message)
+        else:
+            await callback_query.answer("❌ Kanal topilmadi yoki xatolik yuz berdi!")
+
+    except Exception as e:
+        await callback_query.answer(f"❌ Xatolik: {str(e)}")
+
+
+# BOSHQA HANDLERLAR
+
+async def google_sheets_panel(message: types.Message):
+    """Google Sheets panel"""
+    if not is_admin(message.from_user.id):
+        return
+
+    if SHEETS_MODE:
+        sheets_url = get_sheets_url()
+        keyboard = types.InlineKeyboardMarkup()
+
+        if sheets_url:
+            keyboard.add(types.InlineKeyboardButton("📊 Jadvalni ochish", url=sheets_url))
+
+        await message.answer(
+            f"📋 Google Sheets Jadval\n\n"
+            f"📊 Barcha ma'lumotlar shu jadvalda.\n\n"
+            f"🔍 Jadvalda:\n"
+            f"• Ism Familiya\n"
+            f"• Telefon\n"
+            f"• QR ID\n"
+            f"• To'lov holati\n"
+            f"• Kelganlik\n\n"
+            f"💡 QR skanerlash uchun \"📱 QR Skaner\" bosing.",
+            reply_markup=keyboard
+        )
+    else:
+        await message.answer("❌ Google Sheets ulanmagan.\n\n🔄 Botni qayta ishga tushiring.")
+
+
+async def user_mode_handler(message: types.Message):
+    """User rejimiga o'tish"""
+    if not is_admin(message.from_user.id):
+        return
+
+    await message.answer("👤 User rejimiga o'tdingiz:", reply_markup=get_main_menu())
+
+
+# CALLBACK HANDLERLAR
+
+async def debug_channel_command(message: types.Message):
+    """Debug: Kanal parsing test"""
+    if not is_admin(message.from_user.id):
+        return
+
+    db = Database()
+    db.debug_channel_parsing()
+    await message.answer("✅ Debug test yakunlandi. Konsol loglarini tekshiring!")
+
+async def add_event_callback_handler(callback_query: types.CallbackQuery):
+    """Tadbir qo'shish callback"""
+    if not is_admin(callback_query.from_user.id):
+        await callback_query.answer("❌ Bu sizga ruxsat yo'q!")
+        return
+
+    await callback_query.message.answer("🌐 Qaysi tilda tadbir qo'shasiz?",
+                                        reply_markup=get_language_selection_keyboard())
+    await AdminStates.waiting_for_event_language.set()
+    await callback_query.answer()
+
+
+async def select_event_language_callback(callback_query: types.CallbackQuery, state: FSMContext):
+    """Tadbir uchun til tanlash"""
+    if not is_admin(callback_query.from_user.id):
+        await callback_query.answer("❌ Ruxsat yo'q!")
+        return
+
+    lang = callback_query.data.split('_')[2]
+    await state.update_data(event_language=lang)
+
+    texts = get_event_texts(lang)
+    await callback_query.message.edit_text(texts['enter_name'])
+    await AdminStates.waiting_for_event_name.set()
+    await callback_query.answer()
+
+
+# STATE HANDLERLAR
+
+async def process_event_name(message: types.Message, state: FSMContext):
+    """Tadbir nomi"""
+    data = await state.get_data()
+    lang = data.get('event_language', 'uz')
+    texts = get_event_texts(lang)
+
+    await state.update_data(event_name=message.text)
+    await message.answer(texts['enter_date'])
+    await AdminStates.waiting_for_event_date.set()
+
+
+async def process_event_date(message: types.Message, state: FSMContext):
+    """Tadbir sanasi"""
+    data = await state.get_data()
+    lang = data.get('event_language', 'uz')
+    texts = get_event_texts(lang)
+
+    await state.update_data(event_date=message.text)
+    await message.answer(texts['enter_time'])
+    await AdminStates.waiting_for_event_time.set()
+
+
+async def process_event_time(message: types.Message, state: FSMContext):
+    """Tadbir vaqti"""
+    data = await state.get_data()
+    lang = data.get('event_language', 'uz')
+    texts = get_event_texts(lang)
+
+    await state.update_data(event_time=message.text)
+    await message.answer(texts['enter_address'])
+    await AdminStates.waiting_for_event_address.set()
+
+
+async def process_event_address(message: types.Message, state: FSMContext):
+    """Tadbir manzili"""
+    data = await state.get_data()
+    lang = data.get('event_language', 'uz')
+    texts = get_event_texts(lang)
+
+    await state.update_data(event_address=message.text)
+    await message.answer(texts['enter_payment'])
+    await AdminStates.waiting_for_event_payment.set()
+
+
+async def process_event_payment(message: types.Message, state: FSMContext):
+    """AVTOMATIK GOOGLE SHEETS TOZALASH: To'lov summasi"""
+    try:
+        data = await state.get_data()
+        lang = data.get('event_language', 'uz')
+        texts = get_event_texts(lang)
+
+        # Payment amount validation
+        try:
+            payment_amount = float(message.text.replace(',', '').replace(' ', ''))
+        except ValueError:
+            await message.answer(texts['invalid_number'])
+            return
+
+        if payment_amount <= 0:
+            await message.answer(texts['invalid_number'])
+            return
+
+        db = Database()
+
+        # 🔄 AVTOMATIK Google Sheets tozalash
+        if SHEETS_MODE:
+            try:
+                clear_sheets_data()
+                print("✅ Google Sheets avtomatik tozalandi")
+            except Exception as sheets_error:
+                print(f"⚠️ Google Sheets tozalashda xatolik: {sheets_error}")
+
+        # Database ga yangi event qo'shish
+        event_id = db.add_event(
+            data['event_name'], data['event_date'], data['event_time'],
+            data['event_address'], payment_amount, lang
+        )
+
+        if not event_id:
+            await message.answer("❌ Tadbir qo'shishda xatolik yuz berdi!")
+            await state.finish()
+            return
+
+        # Success message
+        await message.answer(
+            f"{texts['event_added']}\n\n"
+            f"🎪 {texts['name']}: {data['event_name']}\n"
+            f"📅 {texts['date']}: {data['event_date']}\n"
+            f"🕐 {texts['time']}: {data['event_time']}\n"
+            f"📍 {texts['address']}: {data['event_address']}\n"
+            f"💰 {texts['payment']}: {payment_amount:,.0f} UZS\n"
+            f"🌐 Til: {lang.upper()}\n"
+            f"🆔 ID: {event_id}",
+            reply_markup=get_admin_keyboard()
+        )
+        await state.finish()
+
+    except ValueError:
+        data = await state.get_data()
+        lang = data.get('event_language', 'uz')
+        texts = get_event_texts(lang)
+        await message.answer(texts['invalid_number'])
+    except Exception as e:
+        print(f"❌ process_event_payment da umumiy xatolik: {e}")
+        await message.answer(f"❌ Xatolik yuz berdi: {str(e)}")
+        await state.finish()
+
+
+async def confirm_clear_sheets_callback(callback_query: types.CallbackQuery):
+    """Google Sheets tozalashni tasdiqlash"""
+    if not is_admin(callback_query.from_user.id):
+        await callback_query.answer("❌ Ruxsat yo'q!")
+        return
+
+    try:
+        await callback_query.message.edit_text("🔄 Google Sheets tozalanmoqda...")
+
+        # Clear sheets
+        clear_sheets_data()
+
+        await callback_query.message.edit_text(
+            "✅ <b>Google Sheets muvaffaqiyatli tozalandi!</b>\n\n"
+            "📋 Barcha eski ma'lumotlar o'chirildi.\n"
+            "🆕 Yangi event ma'lumotlari qo'shilishga tayyor.",
+            parse_mode='HTML'
+        )
+
+        await callback_query.answer("✅ Sheets tozalandi!")
+
+    except Exception as e:
+        await callback_query.message.edit_text(f"❌ Xatolik: {e}")
+        await callback_query.answer("❌ Xatolik yuz berdi!")
+
+async def cancel_clear_sheets_callback(callback_query: types.CallbackQuery):
+    """Google Sheets tozalashni bekor qilish"""
+    if not is_admin(callback_query.from_user.id):
+        await callback_query.answer("❌ Ruxsat yo'q!")
+        return
+
+    await callback_query.message.edit_text("❌ Google Sheets tozalash bekor qilindi.")
+    await callback_query.answer("Bekor qilindi")
+# MAROSIM CALLBACK HANDLERLAR
+
+async def event_detail_callback_handler(callback_query: types.CallbackQuery):
+    """Marosim detallari"""
+    if not is_admin(callback_query.from_user.id):
+        await callback_query.answer("❌ Ruxsat yo'q!")
+        return
+
+    event_id = int(callback_query.data.split('_')[2])
+    db = Database()
+
+    try:
+        events_with_stats = db.get_events_with_stats()
+        event = next((e for e in events_with_stats if e['id'] == event_id), None)
+
+        if not event:
+            await callback_query.answer("❌ Marosim topilmadi!")
+            return
+
+        stats = event['stats']
+        status = "🟢 Faol" if event['is_active'] else "🔴 Nofaol"
+
+        detail_text = (
+            f"🎪 <b>{event['name']}</b>\n\n"
+            f"📅 <b>Sana:</b> {event['date']}\n"
+            f"🕐 <b>Vaqt:</b> {event['time']}\n"
+            f"📍 <b>Manzil:</b> {event['address']}\n"
+            f"💰 <b>To'lov:</b> {event['payment_amount']:,.0f} UZS\n"
+            f"🔄 <b>Holat:</b> {status}\n\n"
+            f"📊 <b>STATISTIKA:</b>\n"
+            f"👥 Jami: {stats['total']}\n"
+            f"✅ Tasdiqlangan: {stats['approved']}\n"
+            f"🎪 Kelgan: {stats['attended']}\n"
+            f"⏳ Kutayotgan: {stats['pending']}"
+        )
+
+        keyboard = types.InlineKeyboardMarkup()
+        toggle_text = "🔴 Nofaol qilish" if event['is_active'] else "🟢 Faol qilish"
+        keyboard.add(types.InlineKeyboardButton(toggle_text, callback_data=f"toggle_event_{event_id}"))
+        keyboard.add(types.InlineKeyboardButton("⬅️ Orqaga", callback_data="back_to_events"))
+
+        await callback_query.message.edit_text(detail_text, reply_markup=keyboard, parse_mode='HTML')
+
+    except Exception as e:
+        await callback_query.answer(f"❌ Xatolik: {e}")
+
+
+async def toggle_event_callback_handler(callback_query: types.CallbackQuery):
+    """Marosim holatini o'zgartirish"""
+    if not is_admin(callback_query.from_user.id):
+        await callback_query.answer("❌ Ruxsat yo'q!")
+        return
+
+    event_id = int(callback_query.data.split('_')[2])
+    db = Database()
+
+    try:
+        result = db.toggle_event_status(event_id)
+        if result:
+            await callback_query.answer("✅ Marosim holati o'zgartirildi!")
+            await events_management_handler(callback_query.message)
+        else:
+            await callback_query.answer("❌ Xatolik yuz berdi!")
+    except Exception as e:
+        await callback_query.answer(f"❌ Xatolik: {e}")
+
+
+async def back_to_events_callback_handler(callback_query: types.CallbackQuery):
+    """Marosimlar boshqaruviga qaytish"""
+    if not is_admin(callback_query.from_user.id):
+        await callback_query.answer("❌ Ruxsat yo'q!")
+        return
+
+    await callback_query.message.delete()
+    await events_management_handler(callback_query.message)
+    await callback_query.answer()
+
+
+# DEBUG KOMANDALAR
+
+async def debug_qr_command(message: types.Message):
+    """Debug: QR kod ma'lumotlarini tekshirish"""
+    if not is_admin(message.from_user.id):
+        return
+
+    test_id = message.text.split(' ')[1] if len(message.text.split(' ')) > 1 else None
+
+    if not test_id:
+        await message.answer("❌ ID kiriting: /debug_qr 123456")
+        return
+
+    try:
+        db = Database()
+        parsed_qr = db.parse_qr_data(test_id)
+
+        debug_text = f"🔍 <b>DEBUG QR: {test_id}</b>\n\n"
+        debug_text += f"📋 <b>Parse natijasi:</b>\n"
+        debug_text += f"Format: {parsed_qr['format']}\n"
+        debug_text += f"ID: {parsed_qr['id']}\n\n"
+
+        # Database test
+        try:
+            user_data = db.get_user_with_full_qr_info_by_qr_id(parsed_qr['id'])
+            if user_data:
+                debug_text += f"👤 <b>Database ma'lumot:</b>\n"
+                debug_text += f"Ism: {user_data['user']['full_name']}\n"
+                debug_text += f"Telefon: {user_data['user']['phone_number']}\n"
+                debug_text += f"Tadbir: {user_data['event']['name']}\n"
+            else:
+                debug_text += f"❌ <b>Database da topilmadi</b>\n"
+        except:
+            debug_text += f"❌ <b>Database xatolik</b>\n"
+
+        await message.answer(debug_text, parse_mode='HTML')
+
+    except Exception as e:
+        await message.answer(f"❌ Debug xatolik: {e}")
+
+
+async def convert_qr_codes_command(message: types.Message):
+    """QR kodlarni JSON formatga o'zgartirish"""
+    if not is_admin(message.from_user.id):
+        return
+
+    await message.answer("🔄 QR kodlarni JSON formatga o'zgartirish boshlandi...")
+
+    try:
+        db = Database()
+        converted_count = db.convert_all_qr_to_json_format()
+
+        await message.answer(
+            f"🎉 <b>QR KODLAR O'ZGARTIRILDI!</b>\n\n"
+            f"✅ O'zgartirilgan: {converted_count} ta\n\n"
+            f"Endi barcha QR kodlar to'liq ma'lumotlar bilan ishlaydi!",
+            parse_mode='HTML'
+        )
+    except Exception as e:
+        await message.answer(f"❌ Xatolik: {e}")
+
+
+# HANDLERLARNI RO'YXATGA OLISH
+
+def register_admin_handlers(dp: Dispatcher):
+    """Admin handlerlarni ro'yxatga olish"""
+    try:
+        # Komanda handlari
+        dp.register_message_handler(admin_panel, Command("admin"))
+        dp.register_message_handler(debug_qr_command, Command("debug_qr"))
+        dp.register_message_handler(convert_qr_codes_command, Command("convert_qr"))
+        dp.register_message_handler(approve_user_handler, lambda m: m.text.startswith('/approve_'))
+        dp.register_message_handler(reject_user_handler, lambda m: m.text.startswith('/reject_'))
+
+        # Tugma handlari
+        dp.register_message_handler(stats_handler, Text(equals="📊 Statistika"), user_id=config.ADMINS)
+        dp.register_message_handler(pending_payments_handler, Text(equals="✅ Kutilayotgan to'lovlar"),
+                                    user_id=config.ADMINS)
+        dp.register_message_handler(add_event_handler, Text(equals="🎪 Tadbir qo'shish"), user_id=config.ADMINS)
+        dp.register_message_handler(events_management_handler, Text(equals="🎪 Marosimlar boshqaruvi"),
+                                    user_id=config.ADMINS)
+        dp.register_message_handler(user_mode_handler, Text(equals="👤 User rejimi"), user_id=config.ADMINS)
+        dp.register_message_handler(channels_management_handler, Text(equals="📢 Kanallar boshqaruvi"),
+                                    user_id=config.ADMINS)
+        dp.register_message_handler(google_sheets_panel, Text(equals="📋 Google Sheets"), user_id=config.ADMINS)
+
+        # QR handlari
+        dp.register_message_handler(qr_scanner_start, Text(equals="📱 QR Skaner"), user_id=config.ADMINS)
+        dp.register_message_handler(qr_scanner_stop, Text(equals="📱 QR Stop"), user_id=config.ADMINS, state="*")
+        dp.register_message_handler(qr_scan_handler, state=AdminStates.qr_scanner_mode, content_types=['text'])
+
+        # State handlari
+        dp.register_message_handler(process_event_name, state=AdminStates.waiting_for_event_name)
+        dp.register_message_handler(process_event_date, state=AdminStates.waiting_for_event_date)
+        dp.register_message_handler(process_event_time, state=AdminStates.waiting_for_event_time)
+        dp.register_message_handler(process_event_address, state=AdminStates.waiting_for_event_address)
+        dp.register_message_handler(process_event_payment, state=AdminStates.waiting_for_event_payment)
+        dp.register_message_handler(debug_channel_command, Command("debug_channels"))
+        dp.register_callback_query_handler(
+            approve_user_callback,
+            lambda c: c.data.startswith('approve_')
+        )
+        dp.register_callback_query_handler(
+            reject_user_callback,
+            lambda c: c.data.startswith('reject_')
+        )
+
+        dp.register_callback_query_handler(
+            confirm_clear_sheets_callback,
+            lambda c: c.data == "confirm_clear_sheets"
+        )
+        dp.register_callback_query_handler(
+            cancel_clear_sheets_callback,
+            lambda c: c.data == "cancel_clear_sheets"
+        )
+        # Kanal state handler - faqat bitta
+        dp.register_message_handler(process_channel_input, state=AdminStates.waiting_for_channel_input)
+
+        # Callback handlari
+        dp.register_callback_query_handler(select_event_language_callback, lambda c: c.data.startswith('event_lang_'),
+                                           state=AdminStates.waiting_for_event_language)
+        dp.register_callback_query_handler(add_event_callback_handler, lambda c: c.data == "add_event")
+        dp.register_callback_query_handler(event_detail_callback_handler, lambda c: c.data.startswith("event_detail_"))
+        dp.register_callback_query_handler(toggle_event_callback_handler, lambda c: c.data.startswith("toggle_event_"))
+        dp.register_callback_query_handler(back_to_events_callback_handler, lambda c: c.data == "back_to_events")
+        dp.register_callback_query_handler(add_channel_callback, lambda c: c.data == "add_channel")
+        dp.register_callback_query_handler(remove_channel_callback, lambda c: c.data.startswith("remove_channel_"))
+
+        print("✅ Admin handlers muvaffaqiyatli ro'yxatdan o'tkazildi")
+
+    except Exception as e:
+        print(f"❌ Admin handler ro'yxatdan o'tkazishda xatolik: {e}")

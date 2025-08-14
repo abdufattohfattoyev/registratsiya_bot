@@ -1,0 +1,61 @@
+from environs import Env
+from pathlib import Path
+
+# .env fayl manzilini aniq ko‘rsatamiz
+BASE_DIR = Path(__file__).resolve().parent.parent
+ENV_PATH = BASE_DIR / ".env"
+
+env = Env()
+env.read_env(ENV_PATH)   # .env fayl ichidan quyidagilarni o'qiymiz
+
+# Asosiy konfiguratsiya
+BOT_TOKEN = env.str("BOT_TOKEN")  # Bot token
+ADMINS = env.list("ADMINS", subcast=int)  # Adminlar ro'yxati (int sifatida)
+IP = env.str("ip")  # Xosting IP manzili
+
+# Google Sheets konfiguratsiyasi
+SPREADSHEET_ID = env.str("SPREADSHEET_ID", None)
+GOOGLE_CREDENTIALS_FILE = 'mybotproject-468611-f179dce8d7df.json'
+SHEET_NAME = 'marosim_bot'
+
+# Ma'lumotlar bazasi konfiguratsiyasi
+DATABASE_PATH = "db/bot_database.db"
+
+# QR kod konfiguratsiyasi
+QR_CODE_SIZE = 10  # QR kod o'lchami
+QR_CODE_BORDER = 4  # QR kod chegarasi
+
+# To'lov konfiguratsiyasi
+DEFAULT_PAYMENT_AMOUNT = 100000  # Standart to'lov summasi (UZS)
+
+# Xabar limitlari
+MAX_NAME_LENGTH = 100
+MIN_NAME_LENGTH = 5
+PHONE_LENGTH = 13  # +998901234567
+
+# Vaqt formatlari
+DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+DISPLAY_DATE_FORMAT = "%d.%m.%Y %H:%M"
+
+# Debug va logging
+DEBUG_MODE = env.bool("DEBUG", False)
+LOG_LEVEL = env.str("LOG_LEVEL", "INFO")
+
+# URL va havolalar
+URLS = {
+    'support': 'https://t.me/your_support',
+    'channel': 'https://t.me/your_channel',
+    'admin': 'https://t.me/your_admin'
+}
+
+# Debug uchun ma'lumotlar chiqarish
+print("🔧 KONFIGURATSIYA YUKLANDI")
+print("=" * 40)
+print(f"🤖 BOT_TOKEN: {'✅ Mavjud' if BOT_TOKEN else '❌ Yo`q'}")
+print(f"👨‍💼 ADMINS: {ADMINS}")
+print(f"📊 SPREADSHEET_ID: {SPREADSHEET_ID if SPREADSHEET_ID else '📝 Avtomatik yaratiladi'}")
+print(f"🗂 GOOGLE_CREDENTIALS: {GOOGLE_CREDENTIALS_FILE}")
+print(f"🌐 IP: {IP}")
+print(f"🐛 DEBUG MODE: {DEBUG_MODE}")
+print("=" * 40)
+
