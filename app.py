@@ -10,6 +10,7 @@ from middlewares.subscription_middleware import SubscriptionMiddleware
 GOOGLE_SHEETS_ENABLED = False
 try:
     from sheets_integration import init_google_sheets, get_sheets_url
+
     GOOGLE_SHEETS_ENABLED = True
     print("✅ Google Sheets (sheets_integration) integratsiyasi yoqildi")
 except ImportError as e:
@@ -77,6 +78,24 @@ async def on_startup(dispatcher):
     try:
         register_user_handlers(dp)
         register_admin_handlers(dp)
+
+        # REKLAMA HANDLERLARINI QO'SHING
+        try:
+            # Reklama faylini import qiling va handlerlarni ro'yxatdan o'tkazing
+            # Agar reklama kodi alohida fayl bo'lsa:
+            # from handlers.users.reklama import register_reklama_handlers
+            # register_reklama_handlers(dp)
+
+            # Agar reklama kodi to'g'ridan-to'g'ri import qilingan bo'lsa:
+            from handlers.users import reklama  # reklama faylini import qiling
+            reklama.register_reklama_handlers(dp)  # handlerlarni ro'yxatdan o'tkazing
+
+            print("✅ Reklama handlerlari muvaffaqiyatli ro'yxatdan o'tdi!")
+        except ImportError as e:
+            print(f"⚠️ Reklama moduli topilmadi: {e}")
+        except Exception as e:
+            print(f"❌ Reklama handlerlarini ro'yxatga olishda xatolik: {e}")
+
         print("✅ Barcha handlerlar muvaffaqiyatli ro'yxatdan o'tdi!")
     except Exception as e:
         print(f"❌ Handlerlarni ro'yxatga olishda xatolik: {e}")
@@ -94,6 +113,7 @@ async def on_startup(dispatcher):
     print("\n📋 MAVJUD FUNKSIYALAR:")
     print("   🔧 Admin panel: /admin")
     print("   📱 QR skaner: Admin panel > QR Skaner")
+    print("   📣 Reklama: Admin panel > Reklama")  # QO'SHILDI
     if GOOGLE_SHEETS_ENABLED:
         print(f"   📊 Google Sheets: Admin panel > Google Sheets")
     print("   👥 Foydalanuvchi boshqaruvi")
@@ -155,6 +175,7 @@ if __name__ == '__main__':
     except Exception as e:
         print(f"\n❌ KRITIK XATOLIK: {e}")
         import traceback
+
         traceback.print_exc()
         print("🔧 Iltimos quyidagilarni tekshiring:")
         print("   - BOT_TOKEN to'g'riligini")

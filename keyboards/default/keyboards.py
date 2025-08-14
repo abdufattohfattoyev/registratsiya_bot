@@ -274,12 +274,13 @@ def get_admin_keyboard():
         KeyboardButton("🎪 Marosimlar boshqaruvi"),
         KeyboardButton("📢 Kanallar boshqaruvi")
     )
+    # keyboard.row(
+    #     KeyboardButton("📋 Google Sheets"),
+    #     KeyboardButton("📱 QR Skaner")
+    # )
     keyboard.row(
-        KeyboardButton("📋 Google Sheets"),
-        KeyboardButton("📱 QR Skaner")
-    )
-    keyboard.row(
-        KeyboardButton("👤 User rejimi")
+        KeyboardButton("📣 Reklama"),
+        # KeyboardButton("👤 User rejimi")
     )
 
     return keyboard

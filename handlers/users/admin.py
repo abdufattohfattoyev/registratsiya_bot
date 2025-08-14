@@ -1,3 +1,4 @@
+
 from aiogram import types, Dispatcher
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
@@ -92,58 +93,58 @@ def get_event_texts(lang):
 
 
 def get_user_approval_message(user, event, lang='uz'):
-    """Foydalanuvchi tasdiqlash xabari"""
+    """Foydalanuvchi tasdiqlash xabari - chiroyli format"""
     texts = {
-        'uz': f"""✅ <b>Tabriklaymiz!</b> To'lovingiz tasdiqlandi.
-Bu QR sizning to'liq elektron chiptangiz.
+        'uz': f"""🎉 <b>Tabriklaymiz, {user[2]}!</b>  
+Sizning to'lovingiz muvaffaqiyatli tasdiqlandi!  
 
-🎟 <b>Ishtirokchi:</b> {user[2]}
-📱 <b>Telefon:</b> {user[3]}
-🎪 <b>Tadbir:</b> {event[1] if event else "Noma'lum marosim"}
-📅 <b>Sana:</b> {event[2] if event else 'N/A'} {event[3] if event else ''}
-📍 <b>Manzil:</b> {event[4] if event else 'N/A'}
-💰 <b>Narx:</b> {event[5] if event else 0:,.0f} UZS
-🆔 <b>Chipta raqami:</b> <code>{user[7]}</code>
+🎟 <b>Sizning elektron chiptangiz:</b>  
+👤 <b>Ishtirokchi:</b> {user[2]}  
+📱 <b>Telefon:</b> {user[3]}  
+📅 <b>Sana va vaqt:</b> {event[2] if event else 'N/A'} {event[3] if event else ''}  
+📍 <b>Manzil:</b> {event[4] if event else 'N/A'}  
+💰 <b>Narx:</b> {event[5] if event else 0:,.0f} UZS  
+�ID <b>Chipta raqami:</b> <code>{user[7]}</code>  
 
-<b>🔥 YANGILIK!</b>
-QR kodingizda barcha ma'lumotlaringiz mavjud.
+🔥 <b>YANGILIK!</b>  
+QR kodingizda barcha ma'lumotlaringiz mavjud. Uni tadbir kuni taqdim eting!  
 
-<b>⚠️ MUHIM!</b>
-Chipta ma'lumotlaringizni sir saqlang!""",
+⚠️ <b>MUHIM!</b>  
+Chipta ma'lumotlaringizni maxfiy saqlang va tadbir kuni QR kodni ko'rsating.""",
 
-        'ru': f"""✅ <b>Поздравляем!</b> Ваша оплата подтверждена.
-Этот QR — ваш полный электронный билет.
+        'ru': f"""🎉 <b>Поздравляем, {user[2]}!</b>  
+Ваш платеж успешно подтвержден!  
 
-🎟 <b>Участник:</b> {user[2]}
-📱 <b>Телефон:</b> {user[3]}
-🎪 <b>Мероприятие:</b> {event[1] if event else "Неизвестное событие"}
-📅 <b>Дата:</b> {event[2] if event else 'N/A'} {event[3] if event else ''}
-📍 <b>Адрес:</b> {event[4] if event else 'N/A'}
-💰 <b>Цена:</b> {event[5] if event else 0:,.0f} UZS
-🆔 <b>Номер билета:</b> <code>{user[7]}</code>
+🎟 <b>Ваш электронный билет:</b>  
+👤 <b>Участник:</b> {user[2]}  
+📱 <b>Телефон:</b> {user[3]}  
+📅 <b>Дата и время:</b> {event[2] if event else 'N/A'} {event[3] if event else ''}  
+📍 <b>Адрес:</b> {event[4] if event else 'N/A'}  
+💰 <b>Стоимость:</b> {event[5] if event else 0:,.0f} UZS  
+🆔 <b>Номер билета:</b> <code>{user[7]}</code>  
 
-<b>🔥 НОВИНКА!</b>
-В вашем QR-коде содержится вся информация.
+🔥 <b>НОВИНКА!</b>  
+Ваш QR-код содержит всю информацию. Предъявите его на мероприятии!  
 
-<b>⚠️ ВАЖНО!</b>
-Храните данные билета в секрете!""",
+⚠️ <b>ВАЖНО!</b>  
+Храните данные билета в секрете и предъявите QR-код на входе.""",
 
-        'en': f"""✅ <b>Congratulations!</b> Your payment has been confirmed.
-This QR is your complete e-ticket.
+        'en': f"""🎉 <b>Congratulations, {user[2]}!</b>  
+Your payment has been successfully confirmed!  
 
-🎟 <b>Participant:</b> {user[2]}
-📱 <b>Phone:</b> {user[3]}
-🎪 <b>Event:</b> {event[1] if event else "Unknown event"}
-📅 <b>Date:</b> {event[2] if event else 'N/A'} {event[3] if event else ''}
-📍 <b>Address:</b> {event[4] if event else 'N/A'}
-💰 <b>Price:</b> {event[5] if event else 0:,.0f} UZS
-🆔 <b>Ticket number:</b> <code>{user[7]}</code>
+🎟 <b>Your e-ticket:</b>  
+👤 <b>Participant:</b> {user[2]}  
+📱 <b>Phone:</b> {user[3]}  
+📅 <b>Date and time:</b> {event[2] if event else 'N/A'} {event[3] if event else ''}  
+📍 <b>Address:</b> {event[4] if event else 'N/A'}  
+💰 <b>Price:</b> {event[5] if event else 0:,.0f} UZS  
+🆔 <b>Ticket number:</b> <code>{user[7]}</code>  
 
-<b>🔥 NEW!</b>
-Your QR code contains all your information.
+🔥 <b>NEW!</b>  
+Your QR code contains all your information. Present it at the event!  
 
-<b>⚠️ IMPORTANT!</b>
-Keep your ticket information confidential!"""
+⚠️ <b>IMPORTANT!</b>  
+Keep your ticket information confidential and show the QR code at the entrance."""
     }
     return texts.get(lang, texts['uz'])
 
@@ -165,7 +166,6 @@ async def update_sheets_data(user_info, event_info):
     """Google Sheets yangilash"""
     if not SHEETS_MODE:
         return False
-
     try:
         success, qr_id = save_user_with_qr_to_sheets(user_info, event_info)
         print(f"📊 Google Sheets: {'✅ Yangilandi' if success else '❌ Xatolik'}")
@@ -235,31 +235,22 @@ async def qr_scan_handler(message: types.Message, state: FSMContext):
     """QR kod skanerlash"""
     if not is_admin(message.from_user.id):
         return
-
     text = message.text.strip()
     if not text:
         await message.answer("❌ QR kod ma'lumotini yuboring!")
         return
-
     qr_id = text.split(':')[0] if ':' in text else text
-
     try:
         db = Database()
-
         with db.get_connection() as conn:
             cursor = conn.cursor()
-
-            # Ma'lumotlarni olish
             cursor.execute('''
-                SELECT u.full_name, u.phone_number, u.payment_status, u.attended,
-                       e.name_uz, e.address_uz, e.payment_amount, u.telegram_id, u.event_id
+                SELECT u.*, e.name_uz as event_name 
                 FROM users u
                 LEFT JOIN events e ON u.event_id = e.id
                 WHERE u.qr_id = ?
             ''', (qr_id,))
-
             result = cursor.fetchone()
-
             if not result:
                 await message.answer(
                     f"❌ <b>QR KOD TOPILMADI!</b>\n\n"
@@ -268,48 +259,37 @@ async def qr_scan_handler(message: types.Message, state: FSMContext):
                     parse_mode='HTML'
                 )
                 return
-
-            # Ma'lumotlarni ajratish
-            full_name, phone, payment_status, attended, event_name, event_address, event_payment, telegram_id, event_id = result
-
-            # Kelganlik belgilash
+            full_name = result[2]
+            phone = result[3]
+            payment_status = result[5]
+            attended = result[10]
+            event_name = result[-1]
             if not attended:
                 now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 admin_name = f"Admin_{message.from_user.first_name}"
-
                 cursor.execute('''
                     UPDATE users SET attended = 1, attended_at = ?, attended_by = ?
                     WHERE qr_id = ?
                 ''', (now, admin_name, qr_id))
                 conn.commit()
-
                 print(f"✅ Kelganlik belgilandi: {full_name} - {event_name}")
-
-                # Google Sheets yangilash
                 if SHEETS_MODE:
                     try:
                         scan_qr_and_mark_attendance(qr_id, admin_name)
                     except Exception as sheets_error:
                         print(f"⚠️ Sheets xatolik: {sheets_error}")
-
-            # Javob matnini yaratish
             qr_display = (
                 f"👤 <b>Ism:</b> {full_name or 'N/A'}\n"
                 f"📱 <b>Telefon:</b> {phone or 'N/A'}\n"
                 f"🆔 <b>Chipta ID:</b> <code>{qr_id}</code>\n\n"
-                f"🎪 <b>Tadbir:</b> {event_name or 'N/A'}\n"
-                f"📍 <b>Manzil:</b> {event_address or 'N/A'}\n"
-                f"💰 <b>Narx:</b> {event_payment or 0:,.0f} UZS\n"
                 f"✅ <b>To'lov:</b> {payment_status or 'N/A'}"
             )
-
             await message.answer(
                 f"✅ <b>MEHMON KELGANLIGI BELGILANDI!</b>\n\n"
                 f"📋 <b>QR KODI MA'LUMOTLARI:</b>\n{qr_display}\n\n"
                 f"📱 Keyingi QR kodni skanerlang.",
                 parse_mode='HTML'
             )
-
     except Exception as e:
         print(f"❌ QR Scan xatolik: {e}")
         await message.answer(
@@ -321,38 +301,26 @@ async def qr_scan_handler(message: types.Message, state: FSMContext):
 
 
 async def approve_user_handler(message: types.Message):
-    """User ni tasdiqlash"""
+    """User ni tasdiqlash (komanda orqali)"""
     if not is_admin(message.from_user.id):
         return
-
     try:
         user_id = int(message.text.split('_')[1])
         db = Database()
         user = db.get_user(user_id)
-
         if not user:
             await message.answer("❌ User topilmadi!")
             return
-
-        # Event ma'lumotlari
         event = db.get_event_by_id(user[4]) if user[4] else None
         event_name = event[1] if event else "Noma'lum marosim"
-
-        # Tasdiqlash
         success = db.approve_user_with_full_qr(user_id, approved=True)
         if not success:
             await message.answer("❌ User tasdiqlashda xatolik!")
             return
-
-        # QR kod olish
         qr_image = db.get_qr_code_image(user_id)
         lang = user[13] if len(user) > 13 and user[13] else 'uz'
-
-        # Foydalanuvchiga yuborish
         user_message = get_user_approval_message(user, event, lang)
         sent = await safe_send_to_user(message.bot, user_id, user_message, qr_image)
-
-        # Google Sheets yangilash
         if SHEETS_MODE:
             user_info = {
                 'telegram_id': user[1], 'full_name': user[2], 'phone': user[3],
@@ -360,31 +328,28 @@ async def approve_user_handler(message: types.Message):
                 'event_id': user[4]
             }
             event_info = {
-                'name': event_name, 'payment_amount': event[5] if event else 100000,
+                'payment_amount': event[5] if event else 100000,
                 'date': event[2] if event else '', 'time': event[3] if event else '',
                 'address': event[4] if event else ''
             }
             sheets_success = await update_sheets_data(user_info, event_info)
-
-        # Admin ga javob
+        else:
+            sheets_success = False
         admin_message = (
             f"✅ <b>USER TASDIQLANDI!</b>\n\n"
             f"👤 <b>Ism:</b> {user[2]}\n"
             f"📱 <b>Telefon:</b> {user[3]}\n"
-            f"🎪 <b>Marosim:</b> {event_name}\n"
             f"🆔 <b>Chipta ID:</b> <code>{user[7]}</code>\n\n"
-            f"📊 Google Sheets: {'✅' if SHEETS_MODE and 'sheets_success' in locals() and sheets_success else '❌'}\n"
+            f"📊 Google Sheets: {'✅' if SHEETS_MODE and sheets_success else '❌'}\n"
             f"📱 Foydalanuvchiga: {'✅' if sent else '❌'}"
         )
-
         await message.answer(admin_message, parse_mode='HTML')
-
     except Exception as e:
         await message.answer(f"❌ Xatolik: {e}")
 
 
 async def reject_user_handler(message: types.Message):
-    """User ni rad etish"""
+    """User ni rad etish (komanda orqali)"""
     if not is_admin(message.from_user.id):
         return
 
@@ -416,67 +381,71 @@ async def approve_user_callback(callback_query: types.CallbackQuery):
     if not is_admin(callback_query.from_user.id):
         await callback_query.answer("❌ Ruxsat yo'q!")
         return
-
     try:
-        user_id = int(callback_query.data.split('_')[1])  # approve_123 -> 123
+        user_id = int(callback_query.data.split('_')[1])
         db = Database()
         user = db.get_user(user_id)
-
         if not user:
             await callback_query.answer("❌ User topilmadi!")
             return
 
-        # Event ma'lumotlari
         event = db.get_event_by_id(user[4]) if user[4] else None
         event_name = event[1] if event else "Noma'lum marosim"
 
-        # Tasdiqlash
         success = db.approve_user_with_full_qr(user_id, approved=True)
         if not success:
             await callback_query.answer("❌ User tasdiqlashda xatolik!")
             return
 
-        # QR kod olish
         qr_image = db.get_qr_code_image(user_id)
         lang = user[13] if len(user) > 13 and user[13] else 'uz'
-
-        # Foydalanuvchiga yuborish
         user_message = get_user_approval_message(user, event, lang)
+
         sent = await safe_send_to_user(callback_query.bot, user_id, user_message, qr_image)
 
-        # Google Sheets yangilash
-        sheets_success = False
         if SHEETS_MODE:
             user_info = {
-                'telegram_id': user[1], 'full_name': user[2], 'phone': user[3],
-                'payment_status': 'paid', 'qr_id': user[7], 'registered_at': user[9],
+                'telegram_id': user[1],
+                'full_name': user[2],
+                'phone': user[3],
+                'payment_status': 'paid',
+                'qr_id': user[7],
+                'registered_at': user[9],
                 'event_id': user[4]
             }
             event_info = {
-                'name': event_name, 'payment_amount': event[5] if event else 100000,
-                'date': event[2] if event else '', 'time': event[3] if event else '',
+                'payment_amount': event[5] if event else 100000,
+                'date': event[2] if event else '',
+                'time': event[3] if event else '',
                 'address': event[4] if event else ''
             }
             sheets_success = await update_sheets_data(user_info, event_info)
+        else:
+            sheets_success = False
 
-        # Admin ga javob
         admin_message = (
             f"✅ <b>USER TASDIQLANDI!</b>\n\n"
             f"👤 <b>Ism:</b> {user[2]}\n"
             f"📱 <b>Telefon:</b> {user[3]}\n"
-            f"🎪 <b>Marosim:</b> {event_name}\n"
             f"🆔 <b>Chipta ID:</b> <code>{user[7]}</code>\n\n"
             f"📊 Google Sheets: {'✅' if SHEETS_MODE and sheets_success else '❌'}\n"
             f"📱 Foydalanuvchiga: {'✅' if sent else '❌'}"
         )
 
-        # Original xabarni yangilash
-        await callback_query.message.edit_text(admin_message, parse_mode='HTML')
+        # Xabar turiga qarab o‘zgartirish yoki yangi xabar yuborish
+        if callback_query.message.text:
+            await callback_query.message.edit_text(admin_message, parse_mode='HTML')
+        elif callback_query.message.caption:
+            await callback_query.message.edit_caption(admin_message, parse_mode='HTML')
+        else:
+            await callback_query.message.answer(admin_message, parse_mode='HTML')
+
         await callback_query.answer("✅ User tasdiqlandi!")
 
     except Exception as e:
         await callback_query.answer(f"❌ Xatolik: {e}")
         print(f"❌ approve_user_callback xatolik: {e}")
+
 
 
 async def reject_user_callback(callback_query: types.CallbackQuery):
@@ -779,8 +748,6 @@ async def process_channel_input(message: types.Message, state: FSMContext):
         await state.finish()
 
 
-
-
 async def remove_channel_callback(callback_query: types.CallbackQuery):
     """Kanal o'chirish callback"""
     if not is_admin(callback_query.from_user.id):
@@ -816,14 +783,11 @@ async def google_sheets_panel(message: types.Message):
     """Google Sheets panel"""
     if not is_admin(message.from_user.id):
         return
-
     if SHEETS_MODE:
         sheets_url = get_sheets_url()
         keyboard = types.InlineKeyboardMarkup()
-
         if sheets_url:
             keyboard.add(types.InlineKeyboardButton("📊 Jadvalni ochish", url=sheets_url))
-
         await message.answer(
             f"📋 Google Sheets Jadval\n\n"
             f"📊 Barcha ma'lumotlar shu jadvalda.\n\n"
@@ -848,8 +812,6 @@ async def user_mode_handler(message: types.Message):
     await message.answer("👤 User rejimiga o'tdingiz:", reply_markup=get_main_menu())
 
 
-# CALLBACK HANDLERLAR
-
 async def debug_channel_command(message: types.Message):
     """Debug: Kanal parsing test"""
     if not is_admin(message.from_user.id):
@@ -858,6 +820,7 @@ async def debug_channel_command(message: types.Message):
     db = Database()
     db.debug_channel_parsing()
     await message.answer("✅ Debug test yakunlandi. Konsol loglarini tekshiring!")
+
 
 async def add_event_callback_handler(callback_query: types.CallbackQuery):
     """Tadbir qo'shish callback"""
@@ -939,39 +902,18 @@ async def process_event_payment(message: types.Message, state: FSMContext):
         lang = data.get('event_language', 'uz')
         texts = get_event_texts(lang)
 
-        # Payment amount validation
-        try:
-            payment_amount = float(message.text.replace(',', '').replace(' ', ''))
-        except ValueError:
-            await message.answer(texts['invalid_number'])
-            return
-
-        if payment_amount <= 0:
-            await message.answer(texts['invalid_number'])
-            return
+        payment_amount = float(message.text)
 
         db = Database()
-
-        # 🔄 AVTOMATIK Google Sheets tozalash
-        if SHEETS_MODE:
-            try:
-                clear_sheets_data()
-                print("✅ Google Sheets avtomatik tozalandi")
-            except Exception as sheets_error:
-                print(f"⚠️ Google Sheets tozalashda xatolik: {sheets_error}")
-
-        # Database ga yangi event qo'shish
         event_id = db.add_event(
             data['event_name'], data['event_date'], data['event_time'],
             data['event_address'], payment_amount, lang
         )
 
-        if not event_id:
-            await message.answer("❌ Tadbir qo'shishda xatolik yuz berdi!")
-            await state.finish()
-            return
+        # Google Sheets tozalash
+        if SHEETS_MODE:
+            clear_sheets_data()
 
-        # Success message
         await message.answer(
             f"{texts['event_added']}\n\n"
             f"🎪 {texts['name']}: {data['event_name']}\n"
@@ -991,9 +933,7 @@ async def process_event_payment(message: types.Message, state: FSMContext):
         texts = get_event_texts(lang)
         await message.answer(texts['invalid_number'])
     except Exception as e:
-        print(f"❌ process_event_payment da umumiy xatolik: {e}")
-        await message.answer(f"❌ Xatolik yuz berdi: {str(e)}")
-        await state.finish()
+        await message.answer(f"❌ Xatolik: {e}")
 
 
 async def confirm_clear_sheets_callback(callback_query: types.CallbackQuery):
@@ -1021,6 +961,7 @@ async def confirm_clear_sheets_callback(callback_query: types.CallbackQuery):
         await callback_query.message.edit_text(f"❌ Xatolik: {e}")
         await callback_query.answer("❌ Xatolik yuz berdi!")
 
+
 async def cancel_clear_sheets_callback(callback_query: types.CallbackQuery):
     """Google Sheets tozalashni bekor qilish"""
     if not is_admin(callback_query.from_user.id):
@@ -1029,6 +970,8 @@ async def cancel_clear_sheets_callback(callback_query: types.CallbackQuery):
 
     await callback_query.message.edit_text("❌ Google Sheets tozalash bekor qilindi.")
     await callback_query.answer("Bekor qilindi")
+
+
 # MAROSIM CALLBACK HANDLERLAR
 
 async def event_detail_callback_handler(callback_query: types.CallbackQuery):
@@ -1180,6 +1123,7 @@ def register_admin_handlers(dp: Dispatcher):
         dp.register_message_handler(convert_qr_codes_command, Command("convert_qr"))
         dp.register_message_handler(approve_user_handler, lambda m: m.text.startswith('/approve_'))
         dp.register_message_handler(reject_user_handler, lambda m: m.text.startswith('/reject_'))
+        dp.register_message_handler(debug_channel_command, Command("debug_channels"))
 
         # Tugma handlari
         dp.register_message_handler(stats_handler, Text(equals="📊 Statistika"), user_id=config.ADMINS)
@@ -1204,25 +1148,8 @@ def register_admin_handlers(dp: Dispatcher):
         dp.register_message_handler(process_event_time, state=AdminStates.waiting_for_event_time)
         dp.register_message_handler(process_event_address, state=AdminStates.waiting_for_event_address)
         dp.register_message_handler(process_event_payment, state=AdminStates.waiting_for_event_payment)
-        dp.register_message_handler(debug_channel_command, Command("debug_channels"))
-        dp.register_callback_query_handler(
-            approve_user_callback,
-            lambda c: c.data.startswith('approve_')
-        )
-        dp.register_callback_query_handler(
-            reject_user_callback,
-            lambda c: c.data.startswith('reject_')
-        )
 
-        dp.register_callback_query_handler(
-            confirm_clear_sheets_callback,
-            lambda c: c.data == "confirm_clear_sheets"
-        )
-        dp.register_callback_query_handler(
-            cancel_clear_sheets_callback,
-            lambda c: c.data == "cancel_clear_sheets"
-        )
-        # Kanal state handler - faqat bitta
+        # Kanal state handler
         dp.register_message_handler(process_channel_input, state=AdminStates.waiting_for_channel_input)
 
         # Callback handlari
@@ -1234,6 +1161,10 @@ def register_admin_handlers(dp: Dispatcher):
         dp.register_callback_query_handler(back_to_events_callback_handler, lambda c: c.data == "back_to_events")
         dp.register_callback_query_handler(add_channel_callback, lambda c: c.data == "add_channel")
         dp.register_callback_query_handler(remove_channel_callback, lambda c: c.data.startswith("remove_channel_"))
+        dp.register_callback_query_handler(approve_user_callback, lambda c: c.data.startswith('approve_'))
+        dp.register_callback_query_handler(reject_user_callback, lambda c: c.data.startswith('reject_'))
+        dp.register_callback_query_handler(confirm_clear_sheets_callback, lambda c: c.data == "confirm_clear_sheets")
+        dp.register_callback_query_handler(cancel_clear_sheets_callback, lambda c: c.data == "cancel_clear_sheets")
 
         print("✅ Admin handlers muvaffaqiyatli ro'yxatdan o'tkazildi")
 

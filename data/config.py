@@ -17,7 +17,7 @@ IP = env.str("ip")  # Xosting IP manzili
 SPREADSHEET_ID = env.str("SPREADSHEET_ID", None)
 GOOGLE_CREDENTIALS_FILE = 'mybotproject-468611-8104acd37ccd.json'
 SHEET_NAME = 'marosim_bot'
-
+SHEETS_MODE = True  # Google Sheets integratsiyasi faol
 # Ma'lumotlar bazasi konfiguratsiyasi
 DATABASE_PATH = "db/bot_database.db"
 

@@ -1,4 +1,4 @@
-from database import Database
+from utils.db_api.database import Database
 
 
 class EventManager:

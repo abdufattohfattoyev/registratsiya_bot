@@ -1,1 +1,0 @@
-# registratsiya_bot

@@ -65,35 +65,96 @@ def get_change_language_keyboard():
 
 
 def get_subscribe_button(channels, lang='uz'):
-    """Kanallarga obuna bo'lish tugmalari"""
+    """TUZATILGAN: Kanallarga obuna bo'lish tugmalari"""
     keyboard = InlineKeyboardMarkup(row_width=1)
 
     for channel_data in channels:
-        # Backward compatibility
-        if len(channel_data) == 2:
-            channel_id, channel_name = channel_data
-            channel_username = channel_name
-        elif len(channel_data) == 3:
-            channel_id, channel_name, channel_username = channel_data
-        else:
-            channel_id = channel_data[1]
-            channel_name = channel_data[2]
-            channel_username = channel_data[3] if len(channel_data) > 3 and channel_data[3] else channel_data[2]
+        try:
+            # Database dan keladigan ma'lumotlar: (channel_id, channel_name, channel_username, channel_type)
+            print(f"🔍 Processing channel: {channel_data}")
 
-        # URL yaratish
-        if channel_username and isinstance(channel_username, str) and channel_username.startswith('@'):
-            url = f"https://t.me/{channel_username[1:]}"
-        elif channel_username and isinstance(channel_username, str) and not channel_username.startswith('@'):
-            url = f"https://t.me/{channel_username}"
-        elif str(channel_id).startswith('-100'):
-            url = f"https://t.me/c/{str(channel_id)[4:]}/1"
-        else:
-            url = f"https://t.me/{channel_name}"
+            if len(channel_data) >= 4:
+                channel_id, channel_name, channel_username, channel_type = channel_data[:4]
+            elif len(channel_data) == 3:
+                channel_id, channel_name, channel_username = channel_data
+                channel_type = 'public'
+            elif len(channel_data) == 2:
+                channel_id, channel_name = channel_data
+                channel_username = None
+                channel_type = 'public'
+            else:
+                print(f"❌ Invalid channel data format: {channel_data}")
+                continue
 
-        keyboard.add(
-            InlineKeyboardButton(f"📢 {channel_name}", url=url)
-        )
+            print(f"📋 Parsed: ID={channel_id}, Name={channel_name}, Username={channel_username}, Type={channel_type}")
 
+            # URL yaratish - TUZATILGAN mantiq
+            url = None
+
+            # 1. Agar channel_username mavjud bo'lsa va to'g'ri bo'lsa
+            if channel_username and isinstance(channel_username, str) and channel_username.strip():
+                username_clean = channel_username.strip()
+
+                # @ belgisini olib tashlash
+                if username_clean.startswith('@'):
+                    username_clean = username_clean[1:]
+
+                # Username ni validatsiya qilish
+                if username_clean and len(username_clean) > 0 and username_clean != 'none' and username_clean != 'yoq':
+                    url = f"https://t.me/{username_clean}"
+                    print(f"✅ URL from username: {url}")
+
+            # 2. Agar username yo'q bo'lsa, channel_id dan foydalanish
+            if not url:
+                if str(channel_id).startswith('@'):
+                    # @username formatdagi channel_id
+                    username_from_id = str(channel_id)[1:]  # @ ni olib tashlash
+                    if username_from_id and username_from_id != 'none':
+                        url = f"https://t.me/{username_from_id}"
+                        print(f"✅ URL from channel_id (username): {url}")
+
+                elif str(channel_id).startswith('-100'):
+                    # Private channel ID
+                    channel_numeric_id = str(channel_id)[4:]  # -100 ni olib tashlash
+                    url = f"https://t.me/c/{channel_numeric_id}/1"
+                    print(f"✅ URL from channel_id (private): {url}")
+
+                elif str(channel_id).isdigit() or (str(channel_id).startswith('-') and str(channel_id)[1:].isdigit()):
+                    # Oddiy raqamli ID
+                    url = f"https://t.me/c/{str(channel_id).replace('-', '')}/1"
+                    print(f"✅ URL from channel_id (numeric): {url}")
+
+            # 3. Fallback: channel_name dan foydalanish (agar boshqa hech narsa ishlamasa)
+            if not url:
+                # Channel name ni tozalash
+                clean_name = str(channel_name).replace('@', '').replace('https://t.me/', '').strip()
+                if clean_name and clean_name != 'none' and len(clean_name) > 0:
+                    url = f"https://t.me/{clean_name}"
+                    print(f"⚠️ Fallback URL from name: {url}")
+                else:
+                    print(f"❌ Cannot create URL for channel: {channel_data}")
+                    continue
+
+            # Display name ni aniqlash
+            display_name = channel_name
+            if not display_name or display_name == 'none':
+                if channel_username:
+                    display_name = f"@{channel_username.replace('@', '')}"
+                else:
+                    display_name = f"Channel {str(channel_id)[:10]}"
+
+            print(f"🎯 Final: Name='{display_name}', URL='{url}'")
+
+            # Tugma qo'shish
+            keyboard.add(
+                InlineKeyboardButton(f"📢 {display_name}", url=url)
+            )
+
+        except Exception as e:
+            print(f"❌ Error processing channel {channel_data}: {e}")
+            continue
+
+    # "Obunani tekshirish" tugmasi
     check_texts = {
         'uz': "✅ Obunani tekshirish",
         'ru': "✅ Проверить подписку",
@@ -213,11 +274,12 @@ def get_admin_keyboard():
         KeyboardButton("🎪 Marosimlar boshqaruvi"),
         KeyboardButton("📢 Kanallar boshqaruvi")
     )
+    # keyboard.row(
+    #     KeyboardButton("📋 Google Sheets"),
+    #     KeyboardButton("📱 QR Skaner")
+    # )
     keyboard.row(
-        KeyboardButton("📋 Google Sheets"),
-        KeyboardButton("📱 QR Skaner")
-    )
-    keyboard.row(
+        KeyboardButton("📣 Reklama"),
         KeyboardButton("👤 User rejimi")
     )
 

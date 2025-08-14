@@ -1,6 +1,7 @@
 import sqlite3
 import json
 import os
+import urllib
 import uuid
 import qrcode
 import io
@@ -8,6 +9,11 @@ import base64
 import re
 from datetime import datetime
 from contextlib import contextmanager
+
+import requests
+
+from data.config import SHEETS_MODE
+from sheets_integration import sheets_client, SPREADSHEET_ID
 
 
 class Database:
@@ -71,7 +77,7 @@ class Database:
                     )
                 ''')
 
-                # Channels jadvali - yangilangan
+                # Channels jadvali
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS channels (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -85,17 +91,19 @@ class Database:
                     )
                 ''')
 
+                # Admins jadvali
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS admins (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER NOT NULL,
+                        is_admin INTEGER DEFAULT 1,
+                        added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (user_id) REFERENCES users (id)
+                    )
+                ''')
+
                 conn.commit()
                 print("✅ Database jadvallari yaratildi!")
-
-                # Default admin qo'shish
-                try:
-                    from data import config
-                    if hasattr(config, 'ADMINS') and config.ADMINS:
-                        for admin_id in config.ADMINS:
-                            print(f"✅ Default admin: {admin_id}")
-                except Exception as e:
-                    print(f"⚠️ Default admin tekshirishda xatolik: {e}")
 
             except Exception as e:
                 print(f"❌ Database yaratishda xatolik: {e}")
@@ -148,6 +156,20 @@ class Database:
                     cursor.execute("ALTER TABLE users ADD COLUMN language TEXT DEFAULT 'uz'")
                     print("✅ language ustuni qo'shildi")
 
+                # Admins jadvali yaratish (agar mavjud bo'lmasa)
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='admins'")
+                if not cursor.fetchone():
+                    cursor.execute('''
+                        CREATE TABLE admins (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            user_id INTEGER NOT NULL,
+                            is_admin INTEGER DEFAULT 1,
+                            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            FOREIGN KEY (user_id) REFERENCES users (id)
+                        )
+                    ''')
+                    print("✅ Admins jadvali yaratildi")
+
                 conn.commit()
                 print("✅ Database strukturasi yangilandi!")
 
@@ -159,7 +181,7 @@ class Database:
         try:
             link = link.strip()
 
-            # Forbidden usernames - expand this list
+            # Forbidden usernames
             forbidden_usernames = {
                 'public', 'private', 'joinchat', 'addstickers', 'proxy', 'socks',
                 'bot', 'channel', 'group', 'supergroup', 'admin', 'support',
@@ -174,7 +196,6 @@ class Database:
             }
 
             # Pattern matching with improved validation
-            # 1. Check for public username patterns first
             username_pattern = r'(?:https?://)?t\.me/([A-Za-z_][A-Za-z0-9_]{4,31})(?:\?[^/]*)?$'
             direct_username_pattern = r'^@?([A-Za-z_][A-Za-z0-9_]{4,31})$'
 
@@ -252,18 +273,15 @@ class Database:
                 'original_link': link,
                 'error': str(e)
             }
-    # Fixed methods for database.py
 
     async def get_channel_info_from_bot(self, bot, channel_data):
-        """TUZATILGAN bot API channel info retrieval"""
+        """Bot API channel info retrieval"""
         try:
             channel_id = channel_data['channel_id']
             channel_type = channel_data.get('type', 'unknown')
             original_username = channel_data.get('username')
 
-            # Invalid kanallar uchun username ni saqlash
             if channel_type in ['invalid', 'unknown', 'error', 'public_invite', 'private_invite']:
-                # Original username mavjud bo'lsa uni ishlatish
                 if original_username:
                     fallback_name = f"@{original_username}"
                 else:
@@ -272,16 +290,14 @@ class Database:
                 return {
                     'success': False,
                     'name': fallback_name,
-                    'username': original_username,  # Original username ni saqlash
+                    'username': original_username,
                     'type': channel_type,
                     'error': f"Cannot retrieve info for {channel_type} channels"
                 }
 
             try:
-                # Bot API orqali ma'lumot olish
                 chat = await bot.get_chat(channel_id)
 
-                # Chat turini tekshirish
                 if chat.type not in ['channel', 'supergroup']:
                     return {
                         'success': False,
@@ -294,7 +310,7 @@ class Database:
                 return {
                     'success': True,
                     'name': chat.title or f"Channel_{channel_id}",
-                    'username': chat.username or original_username,  # Bot API dan yoki original dan
+                    'username': chat.username or original_username,
                     'type': 'channel' if chat.type == 'channel' else 'supergroup',
                     'member_count': getattr(chat, 'members_count', 0),
                     'description': getattr(chat, 'description', ''),
@@ -304,7 +320,6 @@ class Database:
             except Exception as bot_error:
                 print(f"⚠️ Bot API error for {channel_id}: {bot_error}")
 
-                # Bot API xatolik berganida original ma'lumotlarni saqlash
                 error_msg = str(bot_error).lower()
 
                 if 'chat not found' in error_msg:
@@ -314,14 +329,12 @@ class Database:
                 else:
                     error_type = f"API error: {bot_error}"
 
-                # MUHIM: Original username ni saqlash
-                fallback_name = f"@{original_username}" if original_username else self._generate_fallback_name(
-                    channel_data)
+                fallback_name = f"@{original_username}" if original_username else self._generate_fallback_name(channel_data)
 
                 return {
                     'success': False,
                     'name': fallback_name,
-                    'username': original_username,  # Original username saqlanadi
+                    'username': original_username,
                     'type': channel_data.get('type', 'unknown'),
                     'error': error_type
                 }
@@ -341,10 +354,8 @@ class Database:
     async def add_channel_smart(self, bot, channel_link):
         """Fixed async channel addition"""
         try:
-            # Parse the link
             channel_data = self.parse_channel_link(channel_link)
 
-            # Early validation
             if channel_data['type'] in ['invalid', 'error']:
                 return {
                     'success': False,
@@ -359,10 +370,8 @@ class Database:
                     'channel_data': channel_data
                 }
 
-            # Get channel info via bot API (THIS MUST BE AWAITED!)
             channel_info = await self.get_channel_info_from_bot(bot, channel_data)
 
-            # Check if channel already exists
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('SELECT id, channel_name FROM channels WHERE channel_id = ?',
@@ -376,7 +385,6 @@ class Database:
                         'channel_data': channel_data
                     }
 
-                # Add new channel
                 cursor.execute('''
                     INSERT INTO channels (channel_id, channel_name, channel_username, channel_type, is_active) 
                     VALUES (?, ?, ?, ?, 1)
@@ -412,13 +420,12 @@ class Database:
             }
 
     def _generate_fallback_name(self, channel_data):
-        """TUZATILGAN fallback kanal nomi yaratish"""
+        """Fallback kanal nomi yaratish"""
         channel_id = channel_data.get('channel_id', '')
         username = channel_data.get('username')
         channel_type = channel_data.get('type', 'unknown')
         original_link = channel_data.get('original_link', '')
 
-        # Username mavjud bo'lsa, har doim @ bilan qaytarish
         if username:
             return f"@{username}"
         elif channel_type == 'private':
@@ -463,7 +470,7 @@ class Database:
             "t.me/Yosh_Dasturcii",
             "@Yosh_Dasturcii",
             "Yosh_Dasturcii",
-            "https://t.me/public",  # Bu noto'g'ri
+            "https://t.me/public",
             "https://t.me/joinchat/ABC123",
             "https://t.me/+ABC123",
             "-1001234567890"
@@ -485,6 +492,7 @@ class Database:
                 f"   {'✅ TOGRI' if result.get('type') == 'public' and result.get('username') else '❌ NOTOGRI'}")
 
         print("\n" + "=" * 60)
+
     def remove_channel(self, channel_id):
         """Kanalni o'chirish"""
         with self.get_connection() as conn:
@@ -555,10 +563,8 @@ class Database:
         with self.get_connection() as conn:
             cursor = conn.cursor()
             try:
-                # Barcha tadbirlarni nofaol qilish
                 cursor.execute('UPDATE events SET is_active = 0')
 
-                # Yangi tadbir qo'shish
                 name_uz = name_ru = name_en = name
                 address_uz = address_ru = address_en = address
 
@@ -687,7 +693,6 @@ class Database:
                 for event in events:
                     event_id = event[0]
 
-                    # Statistikalarni hisoblash
                     cursor.execute('SELECT COUNT(*) FROM users WHERE event_id = ?', (event_id,))
                     total = cursor.fetchone()[0]
 
@@ -769,7 +774,7 @@ class Database:
                 if not cursor.fetchone():
                     return qr_id
 
-    def get_user(self, telegram_id):
+    def select_user(self, telegram_id):
         """User ma'lumotlarini olish"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
@@ -779,6 +784,63 @@ class Database:
             except Exception as e:
                 print(f"❌ User olishda xatolik: {e}")
                 return None
+
+    def get_user(self, telegram_id):
+        """User ma'lumotlarini olish"""
+        return self.select_user(telegram_id)
+
+    def select_all_users(self):
+        """Barcha userlarni olish"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute('SELECT * FROM users ORDER BY registered_at DESC')
+                return cursor.fetchall()
+            except Exception as e:
+                print(f"❌ Barcha userlarni olishda xatolik: {e}")
+                return []
+
+    def check_if_admin(self, user_id):
+        """User admin ekanligini tekshirish"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute('SELECT is_admin FROM admins WHERE user_id = ? AND is_admin = 1', (user_id,))
+                result = cursor.fetchone()
+                return bool(result)
+            except Exception as e:
+                print(f"❌ Admin tekshirishda xatolik: {e}")
+                return False
+
+    def add_admin(self, user_id):
+        """Yangi admin qo'shish"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute('INSERT OR REPLACE INTO admins (user_id, is_admin) VALUES (?, 1)', (user_id,))
+                conn.commit()
+                print(f"✅ Admin qo'shildi: {user_id}")
+                return True
+            except Exception as e:
+                print(f"❌ Admin qo'shishda xatolik: {e}")
+                return False
+
+    def remove_admin(self, user_id):
+        """Admin huquqini olib tashlash"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute('UPDATE admins SET is_admin = 0 WHERE user_id = ?', (user_id,))
+                if cursor.rowcount > 0:
+                    conn.commit()
+                    print(f"✅ Admin huquqi olib tashlandi: {user_id}")
+                    return True
+                else:
+                    print(f"❌ Admin topilmadi: {user_id}")
+                    return False
+            except Exception as e:
+                print(f"❌ Admin huquqini olib tashlaganda xatolik: {e}")
+                return False
 
     def update_payment_status(self, telegram_id, status='pending_approval'):
         """To'lov statusini yangilash"""
@@ -927,62 +989,64 @@ class Database:
 
     # QR KOD BOSHQARUVI
     def generate_qr_code_with_full_data(self, telegram_id):
-        """To'liq ma'lumotlar bilan QR kod yaratish"""
+        """Foydalanuvchi uchun QR kod yaratish (Google Sheets bilan bir xil formatda)"""
         try:
             user = self.get_user(telegram_id)
             if not user:
                 print(f"❌ User topilmadi: {telegram_id}")
                 return None
 
-            # Event ma'lumotlarini olish
-            event = self.get_event_by_id(user[4]) if user[4] else None
+            qr_id = user[7]  # Faqat qr_id ni olamiz
+            row_number = self._get_user_row_number(telegram_id) or 2  # Agar topilmasa, default 2
 
-            # QR kod uchun to'liq ma'lumotlar
-            qr_data = {
-                "id": user[7],  # qr_id
-                "name": user[2],  # full_name
-                "phone": user[3],  # phone_number
-                "telegram_id": user[1],
-                "event": {
-                    "id": event[0] if event else None,
-                    "name": event[1] if event else "Noma'lum tadbir",
-                    "date": event[2] if event else "",
-                    "time": event[3] if event else "",
-                    "address": event[4] if event else "",
-                    "payment": event[5] if event else 0
-                },
-                "status": {
-                    "payment": user[5],  # payment_status
-                    "approved": bool(user[8]),  # approved
-                    "attended": bool(user[10]),  # attended
-                },
-                "registered": user[9],  # registered_at
-                "qr_created": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            }
+            # Google Sheets dagi kabi formula yaratish
+            qr_formula = self.create_qr_formula(f'F{row_number}', row_number)
 
-            # JSON formatda saqlash
-            qr_json_data = json.dumps(qr_data, ensure_ascii=False, separators=(',', ':'))
+            # api.qrserver.com dan to'g'ridan-to'g'ri rasm olish
+            qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=1200x1200&data={urllib.parse.quote(qr_id)}&margin=20"
+            response = requests.get(qr_url)
 
-            # QR kod yaratish
-            qr = qrcode.QRCode(
-                version=1,
-                error_correction=qrcode.constants.ERROR_CORRECT_M,
-                box_size=10,
-                border=4,
-            )
-            qr.add_data(qr_json_data)
-            qr.make(fit=True)
+            if response.status_code != 200:
+                print(f"❌ QR kod rasm olishda xatolik: {response.status_code}")
+                return None
 
-            # Rasm yaratish
-            img = qr.make_image(fill_color="black", back_color="white")
-            buffer = io.BytesIO()
-            img.save(buffer, format='PNG')
+            # Rasmni base64 formatga aylantirish
+            buffer = io.BytesIO(response.content)
+            qr_code_data = base64.b64encode(buffer.getvalue()).decode()
 
-            print(f"✅ To'liq QR kod yaratildi: {user[2]} - {event[1] if event else 'Nomalum tadbir'}")
-            return base64.b64encode(buffer.getvalue()).decode()
+            print(f"✅ QR kod yaratildi: {user[2]} - ID: {qr_id}")
+            return qr_code_data
 
         except Exception as e:
-            print(f"❌ To'liq QR kod yaratishda xatolik: {e}")
+            print(f"❌ QR kod yaratishda xatolik: {e}")
+            return None
+
+    def _get_user_row_number(self, telegram_id):
+        """Foydalanuvchi qator raqamini olish (Google Sheets uchun)"""
+        try:
+            # Google Sheets dan qator raqamini aniqlash
+            if SHEETS_MODE and SPREADSHEET_ID:
+                data = sheets_client.service.spreadsheets().values().get(
+                    spreadsheetId=SPREADSHEET_ID,
+                    range='E:E'
+                ).execute()
+                values = data.get('values', [])
+                for i, row in enumerate(values, 1):
+                    if row and str(row[0]) == str(self.get_user(telegram_id)[7]):
+                        return i + 1  # Sarlavha qatorini hisobga olamiz
+            return None
+        except Exception as e:
+            print(f"❌ Qator raqamini olishda xatolik: {e}")
+            return None
+
+    def create_qr_formula(self, cell_reference, row_number):
+        """QR kod formulasi yaratish (Google Sheets bilan bir xil)"""
+        try:
+            formula = f'=IMAGE("https://api.qrserver.com/v1/create-qr-code/?size=1200x1200&data=" & ENCODEURL(E{row_number}) & "&margin=20")'
+            print(f"✅ QR formula yaratildi (1200x1200): {cell_reference}")
+            return formula
+        except Exception as e:
+            print(f"❌ QR formula yaratishda xatolik: {e}")
             return None
 
     def approve_user_with_full_qr(self, telegram_id, approved=True):
@@ -1228,3 +1292,7 @@ class Database:
             except Exception as e:
                 print(f"❌ Debug events xatolik: {e}")
                 return []
+
+
+# Global database instance yaratish
+user_db = Database()
