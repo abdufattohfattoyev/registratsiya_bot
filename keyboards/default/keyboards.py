@@ -815,16 +815,13 @@ def get_user_info_keyboard(user_id, lang='uz'):
 
     texts = {
         'uz': {
-            'qr': "🎫 QR kodimni ko'rish",
-            'payment': "💳 To'lov holati"
+            'qr': "🎫 QR kodimni ko'rish"
         },
         'ru': {
-            'qr': "🎫 Посмотреть мой QR код",
-            'payment': "💳 Статус платежа"
+            'qr': "🎫 Посмотреть мой QR код"
         },
         'en': {
-            'qr': "🎫 View my QR code",
-            'payment': "💳 Payment status"
+            'qr': "🎫 View my QR code"
         }
     }
 
