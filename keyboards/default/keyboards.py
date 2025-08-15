@@ -760,33 +760,33 @@ def get_user_review_keyboard(user_id, lang='uz'):
     return keyboard
 
 
-def get_admin_approval_keyboard(user_id, lang='uz'):
-    """Admin tasdiqlash klaviaturasi"""
-    keyboard = InlineKeyboardMarkup(row_width=2)
-
-    texts = {
-        'uz': {
-            'approve': '✅ Tasdiqlash',
-            'reject': '❌ Rad etish'
-        },
-        'ru': {
-            'approve': '✅ Одобрить',
-            'reject': '❌ Отклонить'
-        },
-        'en': {
-            'approve': '✅ Approve',
-            'reject': '❌ Reject'
-        }
-    }
-
-    t = texts.get(lang, texts['uz'])
-
-    keyboard.add(
-        InlineKeyboardButton(t['approve'], callback_data=f"approve_{user_id}"),
-        InlineKeyboardButton(t['reject'], callback_data=f"reject_{user_id}")
-    )
-
-    return keyboard
+# def get_admin_approval_keyboard(user_id, lang='uz'):
+#     """Admin tasdiqlash klaviaturasi"""
+#     keyboard = InlineKeyboardMarkup(row_width=2)
+#
+#     texts = {
+#         'uz': {
+#             'approve': '✅ Tasdiqlash',
+#             'reject': '❌ Rad etish'
+#         },
+#         'ru': {
+#             'approve': '✅ Одобрить',
+#             'reject': '❌ Отклонить'
+#         },
+#         'en': {
+#             'approve': '✅ Approve',
+#             'reject': '❌ Reject'
+#         }
+#     }
+#
+#     t = texts.get(lang, texts['uz'])
+#
+#     keyboard.add(
+#         InlineKeyboardButton(t['approve'], callback_data=f"approve_{user_id}"),
+#         InlineKeyboardButton(t['reject'], callback_data=f"reject_{user_id}")
+#     )
+#
+#     return keyboard
 
 
 def get_back_to_main_keyboard(lang='uz'):

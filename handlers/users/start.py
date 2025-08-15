@@ -14,7 +14,7 @@ from keyboards.default.keyboards import (
     get_language_keyboard,
     get_change_language_keyboard,
     get_user_info_keyboard,
-    get_back_to_main_keyboard, get_admin_approval_keyboard,
+    get_back_to_main_keyboard
 )
 from loader import db
 from utils.db_api.database import Database
@@ -860,8 +860,7 @@ async def process_screenshot(message: types.Message, state: FSMContext):
                     admin_id,
                     file_id,
                     caption=admin_message,
-                    parse_mode='HTML',
-                    reply_markup=get_admin_approval_keyboard(user_id, lang)
+                    parse_mode='HTML'
                 )
             except Exception as e:
                 print(f"Admin {admin_id} ga yuborishda xatolik: {e}")
