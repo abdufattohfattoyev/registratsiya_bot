@@ -7,8 +7,10 @@ services:
     environment:
       - BOT_TOKEN=${BOT_TOKEN}
     volumes:
-      - ./data:/app/data
+      - ./db:/app/db        # 📌 Bazani va backupni saqlash
+      - ./data:/app/data    # 📌 Agar boshqa fayllar ham saqlanishi kerak bo‘lsa
     restart: unless-stopped
 
 volumes:
+  db:
   data:
