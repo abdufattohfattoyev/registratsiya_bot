@@ -810,35 +810,24 @@ def get_back_to_main_keyboard(lang='uz'):
 
 
 def get_user_info_keyboard(user_id, lang='uz'):
-    """User ma'lumotlari klaviaturasi"""
+    """Foydalanuvchi QR kodini ko‘rsatish tugmasi"""
     keyboard = InlineKeyboardMarkup(row_width=1)
 
     texts = {
-        'uz': {
-            'qr': "🎫 QR kodimni ko'rish"
-        },
-        'ru': {
-            'qr': "🎫 Посмотреть мой QR код"
-        },
-        'en': {
-            'qr': "🎫 View my QR code"
-        }
+        'uz': "🎫 QR kodimni ko'rish",
+        'ru': "🎫 Посмотреть мой QR код",
+        'en': "🎫 View my QR code"
     }
-
-    t = texts.get(lang, texts['uz'])
 
     keyboard.add(
         InlineKeyboardButton(
-            t['qr'],
+            texts.get(lang, texts['uz']),
             callback_data=f"my_qr_{user_id}"
-        ),
-        InlineKeyboardButton(
-            t['payment'],
-            callback_data=f"payment_status_{user_id}"
         )
     )
 
     return keyboard
+
 
 
 # ================ UTILITY FUNCTIONS ================
